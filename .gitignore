@@ -1,0 +1,23 @@
+target
+.cache
+
+# Intellij
+###################
+*.iml
+*.ipr
+*.iws
+.idea
+
+# Eclipse
+###################
+**/.settings
+**/.project
+**/.classpath
+**/.checkstyle
+**/.factorypath
+
+# VS Code
+###################
+**/.vscode/
+
+.DS_Store
