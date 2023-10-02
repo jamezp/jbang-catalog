@@ -4,6 +4,10 @@
     "parse-surefire-report": {
       "script-ref": "parsesurefire.java",
       "description": "Parses surefire and failsafe XML reports and outputs a summary report. See help for more details."
+    },
+    "jdk-manager": {
+      "script-ref": "jdkmanager/jdkmanager.java",
+      "description": "A utility to manage JDK's for local usage."
     }
   },
   "templates": {}
