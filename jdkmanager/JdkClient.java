@@ -134,12 +134,12 @@ class JdkClient {
                         final JsonObject errorMessage = Json.createObjectBuilder()
                                 .add("errorMessage", "Could not find resource at " + uri)
                                 .build();
-                        return new Status<>(1, errorMessage);
+                        return new Status<>(1, errorMessage, new String(in.readAllBytes()));
                     }
                     try (JsonReader reader = Json.createReader(in)) {
                         final JsonObject body = reader.readObject();
                         command.printError("Could not determine the available versions: %s", body.getString("errorMessage"));
-                        return new Status<>(1, body);
+                        return new Status<>(1, body, body.toString());
                     }
                 }
             }
@@ -148,7 +148,7 @@ class JdkClient {
                 json = reader.readObject();
             }
         }
-        return new Status<>(0, json);
+        return new Status<>(0, json, json.toString());
     }
 
     Status<Properties> getJavaInfo(final Path javaHome) throws IOException, InterruptedException {
@@ -169,12 +169,13 @@ class JdkClient {
                     .start();
             final int exitCode = process.waitFor();
             final Properties properties = new Properties();
+            final String rawData = Files.readString(tempFile);
             if (exitCode == 0) {
                 try (InputStream in = Files.newInputStream(tempFile)) {
                     properties.load(in);
                 }
             }
-            return new Status<>(exitCode, properties);
+            return new Status<>(exitCode, properties, rawData);
         } finally {
             Files.deleteIfExists(tempFile);
         }
@@ -437,7 +438,7 @@ class JdkClient {
         return Set.copyOf(permissions);
     }
 
-    record Status<T>(int exitStatus, T body) {
+    record Status<T>(int exitStatus, T body, String rawData) {
     }
 
     @SuppressWarnings("SameParameterValue")
