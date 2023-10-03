@@ -19,6 +19,7 @@
 
 package jdkmanager;
 
+import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Iterator;
@@ -129,6 +130,9 @@ class Info extends BaseCommand {
             final var status = client.getJavaInfo(javaHome);
             if (status.exitStatus() > 0) {
                 printError("Failed to get info for Java %s.", version);
+                if (verbose) {
+                    printError("Error: %s", status.rawData());
+                }
                 return status.exitStatus();
             }
             final var properties = status.body();
@@ -166,22 +170,63 @@ class Info extends BaseCommand {
                 generator.flush();
                 print();
             };
-        } else {
-            final String fmt;
-            if (outputFormat == OutputFormat.properties) {
-                fmt = "%s=%s";
-            } else {
-                fmt = "@|bold,green %-30s:|@ %s";
-            }
+        } else if (outputFormat == OutputFormat.properties) {
             completer = () -> {
             };
             lineWriter = (name, value) -> {
-                print(fmt, name, value);
+                writeSanitized(getStdout(), name, true);
+                getStdout().print('=');
+                writeSanitized(getStdout(), value, false);
+                getStdout().println();
+            };
+        } else {
+            completer = () -> {
+            };
+            lineWriter = (name, value) -> {
+                print("@|bold,green %-30s:|@ %s", name, value);
             };
         }
         for (var name : KnownProperties.PROPERTIES) {
             lineWriter.accept(name, properties.getProperty(name));
         }
         completer.run();
+    }
+
+    private static void writeSanitized(final PrintWriter out, final String value, final boolean escapeSpace) {
+        if (value == null) {
+            out.print("null");
+            return;
+        }
+        for (int x = 0; x < value.length(); x++) {
+            final char c = value.charAt(x);
+            switch (c) {
+                case ' ':
+                    if (x == 0 || escapeSpace)
+                        out.append('\\');
+                    out.append(c);
+                    break;
+                case '\t':
+                    out.append('\\').append('t');
+                    break;
+                case '\n':
+                    out.append('\\').append('n');
+                    break;
+                case '\r':
+                    out.append('\\').append('r');
+                    break;
+                case '\f':
+                    out.append('\\').append('f');
+                    break;
+                case '\\':
+                case '=':
+                case ':':
+                case '#':
+                case '!':
+                    out.append('\\').append(c);
+                    break;
+                default:
+                    out.append(c);
+            }
+        }
     }
 }
