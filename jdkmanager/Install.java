@@ -38,7 +38,7 @@ public class Install extends BaseCommand {
         final int version = this.version > 0 ? this.version : client.latestLts();
         if (version > 0) {
             final Path javaHome = WORK_DIR.resolve("jdk-" + version);
-            client.download(javaHome, version)
+            client.download(javaHome, version, false)
                     .thenRun(() -> {
                         print(javaHome);
                     }).toCompletableFuture().get();

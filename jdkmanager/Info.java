@@ -116,7 +116,7 @@ class Info extends BaseCommand {
             if (Files.notExists(javaHome)) {
                 if (downloadIfMissing) {
                     // TODO (jrp) we need to determine this somehow
-                    final int exitCode = client.download(javaHome, version)
+                    final int exitCode = client.download(javaHome, version, !verbose)
                             .toCompletableFuture().get();
                     if (exitCode > 0) {
                         return exitCode;

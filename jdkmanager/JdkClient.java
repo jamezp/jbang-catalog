@@ -180,7 +180,7 @@ class JdkClient {
         }
     }
 
-    CompletionStage<Integer> download(final Path javaHome, final int version) {
+    CompletionStage<Integer> download(final Path javaHome, final int version, final boolean quiet) {
 
         if (command.refresh || Files.notExists(javaHome)) {
             final var earlyAccess = isEarlyAccess(version);
@@ -213,26 +213,31 @@ class JdkClient {
                                     }
                                     final Path download = WORK_DIR.resolve(filename);
                                     if (Files.notExists(download)) {
-                                        final long contentLength = response.headers().firstValueAsLong("content-length")
-                                                .orElse(-1L);
-                                        try (
-                                                ProgressBar progressBar = new ProgressBarBuilder()
-                                                        .setInitialMax(contentLength)
-                                                        .setSpeedUnit(ChronoUnit.MINUTES)
-                                                        .setTaskName("Downloading: ")
-                                                        .setUnit(SizeUnit.MEGABYTE.abbreviation(), SizeUnit.MEGABYTE.toBytes(1))
-                                                        .setStyle(ProgressBarStyle.ASCII)
-                                                        .build();
-                                                OutputStream out = Files.newOutputStream(download)
-                                        ) {
-                                            final byte[] buffer = new byte[4096];
-                                            int len;
-                                            while ((len = in.read(buffer)) > 0) {
-                                                out.write(buffer, 0, len);
-                                                progressBar.stepBy(len);
-                                            }
-                                            if (command.verbose) {
-                                                command.print("Downloaded %s%n", download);
+                                        if (quiet) {
+                                            Files.copy(in, javaHome, StandardCopyOption.REPLACE_EXISTING);
+                                        } else {
+                                            final long contentLength = response.headers()
+                                                    .firstValueAsLong("content-length")
+                                                    .orElse(-1L);
+                                            try (
+                                                    ProgressBar progressBar = new ProgressBarBuilder()
+                                                            .setInitialMax(contentLength)
+                                                            .setSpeedUnit(ChronoUnit.MINUTES)
+                                                            .setTaskName("Downloading: ")
+                                                            .setUnit(SizeUnit.MEGABYTE.abbreviation(), SizeUnit.MEGABYTE.toBytes(1))
+                                                            .setStyle(ProgressBarStyle.ASCII)
+                                                            .build();
+                                                    OutputStream out = Files.newOutputStream(download)
+                                            ) {
+                                                final byte[] buffer = new byte[4096];
+                                                int len;
+                                                while ((len = in.read(buffer)) > 0) {
+                                                    out.write(buffer, 0, len);
+                                                    progressBar.stepBy(len);
+                                                }
+                                                if (command.verbose) {
+                                                    command.print("Downloaded %s%n", download);
+                                                }
                                             }
                                         }
                                     }
