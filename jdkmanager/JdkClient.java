@@ -214,7 +214,7 @@ class JdkClient {
                                     final Path download = WORK_DIR.resolve(filename);
                                     if (Files.notExists(download)) {
                                         if (quiet) {
-                                            Files.copy(in, javaHome, StandardCopyOption.REPLACE_EXISTING);
+                                            Files.copy(in, download, StandardCopyOption.REPLACE_EXISTING);
                                         } else {
                                             final long contentLength = response.headers()
                                                     .firstValueAsLong("content-length")
