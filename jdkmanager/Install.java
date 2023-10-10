@@ -22,12 +22,14 @@ package jdkmanager;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
+import picocli.AutoComplete;
 import picocli.CommandLine;
 
 /**
  * @author <a href="mailto:jperkins@redhat.com">James R. Perkins</a>
  */
-@CommandLine.Command(name = "install", description = "Installs a JDK locally.")
+@CommandLine.Command(name = "install", description = "Installs a JDK locally.",
+        subcommands = AutoComplete.GenerateCompletion.class)
 public class Install extends BaseCommand {
 
     @CommandLine.Parameters(arity = "0..1", description = "The version you'd like to install if missing and resolve the path to set for the JAVA_HOME environment variable.")

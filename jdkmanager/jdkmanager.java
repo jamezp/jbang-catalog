@@ -10,6 +10,8 @@
 package jdkmanager;
 
 import java.nio.file.Files;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.Callable;
 
 import picocli.AutoComplete;
@@ -35,8 +37,7 @@ public class jdkmanager extends BaseCommand implements Callable<Integer> {
     public static void main(String... args) throws Exception {
         final CommandLine commandLine = new CommandLine(new jdkmanager());
         commandLine.setCaseInsensitiveEnumValuesAllowed(true);
-        final var gen = commandLine.getSubcommands().get("generate-completion");
-        gen.getCommandSpec().usageMessage().hidden(true);
+        disableGenerateCompletion(commandLine.getSubcommands().entrySet());
         if (Files.notExists(WORK_DIR)) {
             Files.createDirectories(WORK_DIR);
         }
@@ -49,6 +50,16 @@ public class jdkmanager extends BaseCommand implements Callable<Integer> {
         // Display the usage if there was no sub-command sent
         spec.commandLine().usage(getStdout());
         return 0;
+    }
+
+    private static void disableGenerateCompletion(final Set<Map.Entry<String, CommandLine>> subCommands) {
+        for (Map.Entry<String, CommandLine> entry : subCommands) {
+            if (entry.getKey().equals("generate-completion")) {
+                entry.getValue().getCommandSpec().usageMessage().hidden(true);
+            } else {
+                disableGenerateCompletion(entry.getValue().getSubcommands().entrySet());
+            }
+        }
     }
 
 }
