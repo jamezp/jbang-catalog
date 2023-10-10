@@ -1,0 +1,141 @@
+= JBang Utilities
+
+This is a small repository which holds some https://jbang.dev[JBang] utilities.
+
+== Commands
+
+=== `parse-surefire-report`
+
+This simple utility parses a surefire and failsafe reports and by default just outputs some totals.
+
+==== Installation
+
+The simplest way to install the command is with the https://www.jbang.dev/documentation/guide/latest/alias_catalogs.html[JBang Alias].
+
+[source,bash]
+----
+jbang app install parse-surefire-report@jamezp
+----
+
+To update the application:
+
+[source,bash]
+----
+jbang build --fresh parse-surefire-report@jamezp
+----
+
+==== Usage
+
+[source,bash]
+----
+parse-surefire-report testsuite/
+----
+
+.Example Output
+[source,bash]
+----
+*******************************************************************
+Total: 2796 - PASSED: 2666 - FAILED: 0 - ERRORS: 0 - SKIPPED: 130
+*******************************************************************
+Completed in 00m, 00s, 344ms
+----
+
+[source,bash]
+----
+parse-surefire-report -h
+Usage: parse-surefire-report [-Bdhrv] [--show-path] [--summary] [-f=<format>]
+                             [-o=<output>] [--sort-by=<sortBy>] [-s=<statuses>[,
+                             <statuses>...]]... <file> [COMMAND]
+Parses a surefire report and reports information.
+      <file>               A surefire XML report or a directory which contains
+                             reports.
+                             Default: .
+  -B, --batch              Batch mode disables any colorization of the output.
+  -d, --print-details      Prints only the totals and skips any detailed
+                             reporting.
+  -f, --format=<format>    The format pattern to use for the output.
+                           The following is are the options for the summary
+                             output:
+                           %t - the total number of tests
+                           %p - the total number of passed tests
+                           %f - the total number of failed tests
+                           %e - the total number of errored tests
+                           %s - the total number of skipped tests
+                           %n - new line
+  -h, --help               Display this help message
+  -o, --output=<output>    A path to a file used of the output.
+  -r, --reverse            Prints the results in the reversed sort order.
+  -s, --status=<statuses>[,<statuses>...]
+                           Print only the specific status. This can be a comma
+                             delimited list. The options are PASSED, FAILED,
+                             ERROR, SKIPPED.
+      --show-path          Shows the path to the file parsed
+      --sort-by=<sortBy>   The order to sort the results. The options are
+                             status, name, time
+                             Default: status
+      --summary            Prints only the summary
+  -v, --verbose            Prints verbose output.
+----
+
+=== 'jdk-manager`
+
+==== Installation
+
+The simplest way to install the command is with the https://www.jbang.dev/documentation/guide/latest/alias_catalogs.html[JBang Alias].
+
+[source,bash]
+----
+jbang app install jdk-manager@jamezp
+----
+
+To update the application:
+
+[source,bash]
+----
+jbang build --fresh jdk-manager@jamezp
+----
+
+==== Usage
+
+Listing the available JDK's for download:
+[source,bash]
+----
+jdk-manager list
+LTS Versions
+  8
+  11
+  17
+ *21
+Versions
+  8
+  11
+  16
+  17
+  18
+  19
+  20
+  21
+----
+
+Listing locally installed JDK's from this tool:
+----
+jdk-manager list --local
+Eclipse Adoptium 17.0.8.1 (2023-08-24): /home/jperkins/.jdk-manager/jdk-17
+Eclipse Adoptium 20.0.2 (2023-07-18): /home/jperkins/.jdk-manager/jdk-20
+Eclipse Adoptium 11.0.20.1 (2023-08-24): /home/jperkins/.jdk-manager/jdk-11
+Temurin 1.8.0_382 (null): /home/jperkins/.jdk-manager/jdk-8
+Eclipse Adoptium 22-beta (2024-03-19): /home/jperkins/.jdk-manager/jdk-22
+Eclipse Adoptium 21 (2023-09-19): /home/jperkins/.jdk-manager/jdk-21
+----
+
+Installing a JDK
+[source,bash]
+----
+jdk-manager install 21
+----
+
+Setting the `JAVA_HOME` based on the result of a local JDK.
+[source,bash]
+----
+export JAVA_HOME="$(jdk-manager info -d -p java.home 21)"
+----
