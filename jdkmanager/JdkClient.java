@@ -44,6 +44,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -175,19 +176,17 @@ class JdkClient {
                         inProperties = true;
                         continue;
                     }
-                    if (line.isBlank() && inProperties) {
-                        break;
-                    }
                     if (inProperties) {
                         final var trimmed = line.trim();
                         final int i = trimmed.indexOf('=');
                         if (i > 0) {
-                            properties.put(trimmed.substring(0, i).trim(), trimmed.substring(i + 1).trim());
+                            final var key = trimmed.substring(0, i).trim();
+                            if (KnownProperties.PROPERTIES.contains(key)) {
+                                final var value = trimmed.substring(i + 1).trim();
+                                properties.setProperty(key, value);
+                            }
                         }
                     }
-                }
-                try (InputStream in = Files.newInputStream(tempFile)) {
-                    properties.load(in);
                 }
             }
             return new Status<>(exitCode, properties, () -> {
@@ -522,7 +521,7 @@ class JdkClient {
         }
     }
 
-    private static enum SizeUnit {
+    private enum SizeUnit {
         BYTE(1L, "B") {
             @Override
             public String toString(final long size) {
@@ -624,4 +623,46 @@ class JdkClient {
         }
     }
 
+    static class KnownProperties implements Iterable<String> {
+        static final List<String> PROPERTIES = List.of(
+                "java.version",
+                "java.version.date",
+                "java.vendor",
+                "java.vendor.url",
+                "java.vendor.version",
+                "java.home",
+                "java.vm.specification.version",
+                "java.vm.specification.vendor",
+                "java.vm.specification.name",
+                "java.vm.version",
+                "java.vm.vendor",
+                "java.vm.name",
+                "java.specification.version",
+                "java.specification.vendor",
+                "java.specification.name",
+                "java.class.version",
+                // Keeping this as it's a standard property, but doesn't do us much good here
+                // "java.class.path",
+                //"java.library.path",
+                "java.io.tmpdir",
+                "os.name",
+                "os.arch",
+                "os.version",
+                "file.separator",
+                "path.separator",
+                "line.separator",
+                "user.name",
+                "user.home",
+                "user.dir"
+        );
+
+        @Override
+        public Iterator<String> iterator() {
+            return PROPERTIES.iterator();
+        }
+
+        static boolean missing(final String property) {
+            return property != null && !PROPERTIES.contains(property);
+        }
+    }
 }

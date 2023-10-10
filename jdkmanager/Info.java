@@ -22,8 +22,6 @@ package jdkmanager;
 import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Iterator;
-import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.function.BiConsumer;
@@ -42,49 +40,6 @@ import picocli.CommandLine.Parameters;
         subcommands = AutoComplete.GenerateCompletion.class)
 class Info extends BaseCommand {
 
-    static class KnownProperties implements Iterable<String> {
-        static final List<String> PROPERTIES = List.of(
-                "java.version",
-                "java.version.date",
-                "java.vendor",
-                "java.vendor.url",
-                "java.vendor.version",
-                "java.home",
-                "java.vm.specification.version",
-                "java.vm.specification.vendor",
-                "java.vm.specification.name",
-                "java.vm.version",
-                "java.vm.vendor",
-                "java.vm.name",
-                "java.specification.version",
-                "java.specification.vendor",
-                "java.specification.name",
-                "java.class.version",
-                // Keeping this as it's a standard property, but doesn't do us much good here
-                // "java.class.path",
-                "java.library.path",
-                "java.io.tmpdir",
-                "os.name",
-                "os.arch",
-                "os.version",
-                "file.separator",
-                "path.separator",
-                "line.separator",
-                "user.name",
-                "user.home",
-                "user.dir"
-        );
-
-        @Override
-        public Iterator<String> iterator() {
-            return PROPERTIES.iterator();
-        }
-
-        static boolean missing(final String property) {
-            return property != null && !PROPERTIES.contains(property);
-        }
-    }
-
     enum OutputFormat {
         json,
         properties
@@ -96,7 +51,7 @@ class Info extends BaseCommand {
     @Option(names = {"-f", "--format"}, description = "The output format of the results.")
     private OutputFormat outputFormat;
 
-    @Option(names = {"-p", "--property"}, description = "The property to print. Note that the format parameter has no affect on the output with this argument.", completionCandidates = KnownProperties.class)
+    @Option(names = {"-p", "--property"}, description = "The property to print. Note that the format parameter has no affect on the output with this argument.", completionCandidates = JdkClient.KnownProperties.class)
     private String property;
 
     @Parameters(arity = "0..1", description = "The version you'd like to get the properties for.")
@@ -104,9 +59,10 @@ class Info extends BaseCommand {
 
     @Override
     Integer call(final JdkClient client) throws Exception {
-        if (KnownProperties.missing(property)) {
+        if (JdkClient.KnownProperties.missing(property)) {
             final StringBuilder properties = new StringBuilder();
-            KnownProperties.PROPERTIES.forEach((name) -> properties.append(System.lineSeparator()).append(name));
+            JdkClient.KnownProperties.PROPERTIES.forEach((name) -> properties.append(System.lineSeparator())
+                    .append(name));
             printError("Property \"%s\" is is not a valid property. Valid properties are: %s", property, properties);
             return 1;
         }
@@ -184,7 +140,7 @@ class Info extends BaseCommand {
                 print("@|bold,green %-30s:|@ %s", name, value);
             };
         }
-        for (var name : KnownProperties.PROPERTIES) {
+        for (var name : JdkClient.KnownProperties.PROPERTIES) {
             lineWriter.accept(name, properties.getProperty(name));
         }
         completer.run();
