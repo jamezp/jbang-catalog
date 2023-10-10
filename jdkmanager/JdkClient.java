@@ -54,6 +54,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 import jakarta.json.Json;
 import jakarta.json.JsonObject;
@@ -154,14 +155,10 @@ class JdkClient {
     Status<Properties> getJavaInfo(final Path javaHome) throws IOException, InterruptedException {
         final String[] commands = {
                 javaHome.resolve("bin").resolve("java").toString(),
-                "-classpath",
-                System.getProperty("java.class.path"),
-                "jdkmanager.jdkmanager",
-                "info",
-                "-f",
-                "properties"
+                "-XshowSettings:properties",
+                "-version"
         };
-        final Path tempFile = Files.createTempFile("jdk-info", ".json");
+        final Path tempFile = Files.createTempFile("jdk-info", ".out");
         try {
             final Process process = new ProcessBuilder(commands)
                     .redirectErrorStream(true)
@@ -169,13 +166,37 @@ class JdkClient {
                     .start();
             final int exitCode = process.waitFor();
             final Properties properties = new Properties();
-            final String rawData = Files.readString(tempFile);
+            final List<String> lines = Files.readAllLines(tempFile);
             if (exitCode == 0) {
+                // Read each line looking for "Property settings:"
+                boolean inProperties = false;
+                for (var line : lines) {
+                    if (line.trim().startsWith("Property settings:")) {
+                        inProperties = true;
+                        continue;
+                    }
+                    if (line.isBlank() && inProperties) {
+                        break;
+                    }
+                    if (inProperties) {
+                        final var trimmed = line.trim();
+                        final int i = trimmed.indexOf('=');
+                        if (i > 0) {
+                            properties.put(trimmed.substring(0, i).trim(), trimmed.substring(i + 1).trim());
+                        }
+                    }
+                }
                 try (InputStream in = Files.newInputStream(tempFile)) {
                     properties.load(in);
                 }
             }
-            return new Status<>(exitCode, properties, rawData);
+            return new Status<>(exitCode, properties, () -> {
+                final StringBuilder builder = new StringBuilder();
+                for (String line : lines) {
+                    builder.append(line).append(System.lineSeparator());
+                }
+                return builder.toString();
+            });
         } finally {
             Files.deleteIfExists(tempFile);
         }
@@ -438,7 +459,10 @@ class JdkClient {
         return Set.copyOf(permissions);
     }
 
-    record Status<T>(int exitStatus, T body, String rawData) {
+    record Status<T>(int exitStatus, T body, Supplier<String> rawData) {
+        public Status(final int exitStatus, final T body, final String rawData) {
+            this(exitStatus, body, () -> rawData);
+        }
     }
 
     @SuppressWarnings("SameParameterValue")

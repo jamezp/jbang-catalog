@@ -64,7 +64,6 @@ class Info extends BaseCommand {
                 // "java.class.path",
                 "java.library.path",
                 "java.io.tmpdir",
-                "java.compiler",
                 "os.name",
                 "os.arch",
                 "os.version",
@@ -73,8 +72,7 @@ class Info extends BaseCommand {
                 "line.separator",
                 "user.name",
                 "user.home",
-                "user.dir",
-                "native.encoding"
+                "user.dir"
         );
 
         @Override
@@ -131,7 +129,7 @@ class Info extends BaseCommand {
             if (status.exitStatus() > 0) {
                 printError("Failed to get info for Java %s.", version);
                 if (verbose) {
-                    printError("Error: %s", status.rawData());
+                    printError("Error: %s", status.rawData().get());
                 }
                 return status.exitStatus();
             }
