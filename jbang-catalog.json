@@ -8,7 +8,11 @@
     "jdk-manager": {
       "script-ref": "jdkmanager/jdkmanager.java",
       "description": "A utility to manage JDK's for local usage."
-    }
+    },
+    "echo-server": {
+      "script-ref": "EchoServer.java",
+      "description": "A utility which echos output from a TCP socket, UDP socket or HTTP server to stdout."
+    },
   },
   "templates": {}
 }
