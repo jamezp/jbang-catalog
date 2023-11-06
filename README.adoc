@@ -2,6 +2,8 @@
 
 This is a small repository which holds some https://jbang.dev[JBang] utilities.
 
+All commands listed will have a hidden `generate-completion` sub-command for auto-completion in bash or ZSH.
+
 == Commands
 
 === `parse-surefire-report`
@@ -138,4 +140,32 @@ Setting the `JAVA_HOME` based on the result of a local JDK.
 [source,bash]
 ----
 export JAVA_HOME="$(jdk-manager info -d -p java.home 21)"
+----
+
+=== `echo-server`
+
+This simple utility creates a server socket and echos the data received to `stdout`.
+
+==== Installation
+
+The simplest way to install the command is with the https://www.jbang.dev/documentation/guide/latest/alias_catalogs.html[JBang Alias].
+
+[source,bash]
+----
+jbang app install echo-server@jamezp
+----
+
+To update the application:
+
+[source,bash]
+----
+jbang build --fresh echo-server@jamezp
+----
+
+==== Usage
+
+[source,bash]
+----
+echo-server --tcp -p 9514
+echo-server --http -p 8080
 ----
