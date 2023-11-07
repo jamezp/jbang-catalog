@@ -12,7 +12,7 @@
     "echo-server": {
       "script-ref": "EchoServer.java",
       "description": "A utility which echos output from a TCP socket, UDP socket or HTTP server to stdout."
-    },
+    }
   },
   "templates": {}
 }
