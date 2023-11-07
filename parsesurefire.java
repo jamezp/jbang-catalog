@@ -1,5 +1,5 @@
 ///usr/bin/env jbang "$0" "$@" ; exit $?
-//JAVA 11+
+//JAVA 21+
 //DEPS info.picocli:picocli:4.7.3
 //DEPS org.jsoup:jsoup:1.16.1
 
@@ -9,18 +9,15 @@ import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileVisitResult;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardOpenOption;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.text.NumberFormat;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.LinkedHashMap;
@@ -29,6 +26,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
@@ -37,6 +35,7 @@ import java.util.concurrent.RecursiveAction;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -54,7 +53,6 @@ import picocli.CommandLine.Spec;
 @Command(name = "parse-surefire-report", description = "Parses a surefire report and reports information.",
         showDefaultValues = true, subcommands = AutoComplete.GenerateCompletion.class)
 public class parsesurefire implements Callable<Integer> {
-    private static final Pattern FILE_PATTERN = Pattern.compile("^TEST.*\\.xml$");
 
     /**
      * The regular expression for format strings. Ain't regex grand?
@@ -81,16 +79,6 @@ public class parsesurefire implements Callable<Integer> {
     @Option(names = {"-B", "--batch"}, description = "Batch mode disables any colorization of the output.")
     private boolean batch;
 
-    @Option(names = {"-d", "--print-details"}, description = "Prints only the totals and skips any detailed reporting.", defaultValue = "false")
-    private boolean printDetail;
-
-    @Option(names = {"-o", "--output"}, description = "A path to a file used of the output.")
-    private String output;
-
-    @SuppressWarnings("unused")
-    @Option(names = {"-h", "--help"}, usageHelp = true, description = "Display this help message")
-    private boolean usageHelpRequested;
-
     @Option(names = {"-f", "--format"}, description = {
             "The format pattern to use for the output.",
             "The following is are the options for the summary output:",
@@ -104,8 +92,14 @@ public class parsesurefire implements Callable<Integer> {
             "@|bold,white Total: %t|@ - @|green PASSED: %p|@ - @|red FAILED: %f|@ - @|bold,red ERRORS: %e|@ - @|yellow SKIPPED: %s|@")
     private String format;
 
-    @Option(names = {"-r", "--reverse"}, description = "Prints the results in the reversed sort order.", defaultValue = "false")
-    private boolean reverse;
+    @Option(names = {"-g", "--group"}, description = "Groups the results by the directory the files were found in.", defaultValue = "false")
+    private boolean group;
+
+    @Option(names = {"-o", "--output"}, description = "A path to a file used of the output.")
+    private String output;
+
+    @Option(names = {"-r", "--report-type"}, description = "The type of output for the report. The options are ${COMPLETION-CANDIDATES}", defaultValue = "total")
+    private ReportType reportType;
 
     @Option(names = {"-s", "--status"}, description = "Print only the specific status. This can be a comma delimited list. The options are ${COMPLETION-CANDIDATES}.",
             split = ",")
@@ -117,8 +111,9 @@ public class parsesurefire implements Callable<Integer> {
     @Option(names = {"--sort-by"}, description = "The order to sort the results. The options are ${COMPLETION-CANDIDATES}", defaultValue = "status")
     private SortBy sortBy;
 
-    @Option(names = {"--summary"}, description = "Prints only the summary", defaultValue = "false")
-    private boolean summary;
+    @SuppressWarnings("unused")
+    @Option(names = {"-h", "--help"}, usageHelp = true, description = "Display this help message")
+    private boolean usageHelpRequested;
 
     @Option(names = {"-v", "--verbose"}, description = "Prints verbose output.")
     private boolean verbose;
@@ -142,123 +137,54 @@ public class parsesurefire implements Callable<Integer> {
     public Integer call() throws Exception {
         final Instant start = Instant.now();
         try {
-            final EnumMap<Status, Set<TestResult>> results = new EnumMap<>(Status.class);
-            results.put(Status.PASSED, ConcurrentHashMap.newKeySet());
-            results.put(Status.FAILED, ConcurrentHashMap.newKeySet());
-            results.put(Status.ERROR, ConcurrentHashMap.newKeySet());
-            results.put(Status.SKIPPED, ConcurrentHashMap.newKeySet());
+            final Map<Path, EnumMap<Status, Set<TestResult>>> grouped = new TreeMap<>();
             if (Files.isDirectory(file)) {
                 final ForkJoinPool pool = new ForkJoinPool();
-                Files.walkFileTree(file, new SimpleFileVisitor<>() {
-                    @Override
-                    public FileVisitResult visitFile(final Path file, final BasicFileAttributes attrs) {
-                        final String filename = file.getFileName().toString();
-                        if (FILE_PATTERN.matcher(filename).matches()) {
-                            pool.submit(new RecursiveAction() {
+                final var pattern = FileSystems.getDefault().getPathMatcher("glob:**/TEST-*.xml");
+                final var globalResults = createResultMap();
+                try (Stream<Path> files = Files.walk(file)) {
+                    files.filter(pattern::matches)
+                            .forEach(p -> pool.submit(new RecursiveAction() {
                                 @Override
                                 protected void compute() {
-                                    parseResults(file, results);
+                                    final EnumMap<Status, Set<TestResult>> results;
+                                    if (group) {
+                                        synchronized (grouped) {
+                                            results = grouped.computeIfAbsent(p.getParent(), (current) -> createResultMap());
+                                        }
+                                    } else {
+                                        synchronized (grouped) {
+                                            results = grouped.computeIfAbsent(file, (current) -> globalResults);
+                                        }
+                                    }
+                                    parseResults(p, results);
                                 }
-                            });
-                        }
-                        return FileVisitResult.CONTINUE;
-                    }
-                });
+                            }));
+                }
                 pool.shutdown();
                 if (!pool.awaitTermination(60L, TimeUnit.MINUTES)) {
                     throw new CommandLine.ExecutionException(spec.commandLine(), "Parsing did not complete within 60 minutes.");
                 }
             } else {
+                final var results = createResultMap();
                 parseResults(file, results);
+                grouped.put(file, results);
             }
-            final Set<TestResult> passedResults = new TreeSet<>(results.get(Status.PASSED));
-            final Set<TestResult> failedResults = new TreeSet<>(results.get(Status.FAILED));
-            final Set<TestResult> errorResults = new TreeSet<>(results.get(Status.ERROR));
-            final Set<TestResult> skippedResults = new TreeSet<>(results.get(Status.SKIPPED));
-
-            // Prepare the summary first to validate the format pattern
-            final var success = passedResults.size();
-            final var failures = failedResults.size();
-            final var errors = errorResults.size();
-            final var skipped = skippedResults.size();
-            final var totalSummary = formatTotal((success + failures + errors + skipped), success, failures, errors, skipped);
-
-            if (printDetail) {
-                if (sortBy == SortBy.status) {
-                    final Map<Status, Set<TestResult>> toPrint = new LinkedHashMap<>(4);
-                    if (statuses == null || statuses.isEmpty()) {
-                        toPrint.put(Status.PASSED, passedResults);
-                        toPrint.put(Status.FAILED, failedResults);
-                        toPrint.put(Status.ERROR, errorResults);
-                        toPrint.put(Status.SKIPPED, skippedResults);
-                    } else {
-                        if (statuses.contains(Status.PASSED)) {
-                            toPrint.put(Status.PASSED, passedResults);
-                        }
-                        if (statuses.contains(Status.FAILED)) {
-                            toPrint.put(Status.FAILED, failedResults);
-                        }
-                        if (statuses.contains(Status.ERROR)) {
-                            toPrint.put(Status.ERROR, errorResults);
-                        }
-                        if (statuses.contains(Status.SKIPPED)) {
-                            toPrint.put(Status.SKIPPED, skippedResults);
-                        }
+            final EnumMap<Status, Set<TestResult>> totals = createResultMap();
+            for (var group : grouped.entrySet()) {
+                final var results = group.getValue();
+                if (this.group) {
+                    print("@|bold,cyan %s|@", group.getKey());
+                    for (Status status : results.keySet()) {
+                        totals.get(status).addAll(results.get(status));
                     }
-                    final Collection<Map.Entry<Status, Set<TestResult>>> entries;
-                    if (reverse) {
-                        entries = new ArrayList<>(toPrint.entrySet());
-                        Collections.reverse((List<?>) entries);
-                    } else {
-                        entries = List.copyOf(toPrint.entrySet());
-                    }
-                    for (var entry : entries) {
-                        if (entry.getValue().isEmpty()) {
-                            print("No %s tests found.", entry.getKey().name());
-                        } else {
-                            printResult(entry.getKey(), entry.getValue());
-                        }
-                        print();
-                    }
-                } else {
-                    final List<TestResult> combined = new ArrayList<>();
-                    if (statuses == null || statuses.isEmpty()) {
-                        combined.addAll(passedResults);
-                        combined.addAll(failedResults);
-                        combined.addAll(errorResults);
-                        combined.addAll(skippedResults);
-                    } else {
-                        if (statuses.contains(Status.PASSED)) {
-                            combined.addAll(passedResults);
-                        }
-                        if (statuses.contains(Status.FAILED)) {
-                            combined.addAll(failedResults);
-                        }
-                        if (statuses.contains(Status.ERROR)) {
-                            combined.addAll(errorResults);
-                        }
-                        if (statuses.contains(Status.SKIPPED)) {
-                            combined.addAll(skippedResults);
-                        }
-                    }
-                    final Comparator<TestResult> comparator;
-                    if (sortBy == SortBy.name) {
-                        combined.addAll(skippedResults);
-                        comparator = Comparator.comparing(testResult -> testResult.className);
-                    } else {
-                        comparator = Comparator.comparing(testResult -> testResult.time);
-                    }
-                    combined.sort(comparator);
-                    printSortedResult(sortBy, combined);
                 }
-                print();
+                printTotals(results, reportType.printDetail());
             }
-            // Print a summary
-            // Determine the output length
-            final var len = format(CommandLine.Help.Ansi.OFF, totalSummary).length() + 2;
-            print("*".repeat(len));
-            print(totalSummary);
-            print("*".repeat(len));
+            if (group) {
+                print("@|bold All Tests|@");
+                printTotals(totals, false);
+            }
             return 0;
         } finally {
             spec.commandLine()
@@ -268,6 +194,100 @@ public class parsesurefire implements Callable<Integer> {
                 writer.close();
             }
         }
+    }
+
+    private EnumMap<Status, Set<TestResult>> createResultMap() {
+        final EnumMap<Status, Set<TestResult>> map = new EnumMap<>(Status.class);
+        map.put(Status.PASSED, ConcurrentHashMap.newKeySet());
+        map.put(Status.FAILED, ConcurrentHashMap.newKeySet());
+        map.put(Status.ERROR, ConcurrentHashMap.newKeySet());
+        map.put(Status.SKIPPED, ConcurrentHashMap.newKeySet());
+        return map;
+    }
+
+    private void printTotals(final EnumMap<Status, Set<TestResult>> results, final boolean printDetail) {
+        final Set<TestResult> passedResults = new TreeSet<>(results.get(Status.PASSED));
+        final Set<TestResult> failedResults = new TreeSet<>(results.get(Status.FAILED));
+        final Set<TestResult> errorResults = new TreeSet<>(results.get(Status.ERROR));
+        final Set<TestResult> skippedResults = new TreeSet<>(results.get(Status.SKIPPED));
+
+        // Prepare the summary first to validate the format pattern
+        final var success = passedResults.size();
+        final var failures = failedResults.size();
+        final var errors = errorResults.size();
+        final var skipped = skippedResults.size();
+        final var totalSummary = formatTotal((success + failures + errors + skipped), success, failures, errors, skipped);
+
+        if (printDetail) {
+            if (sortBy == SortBy.status) {
+                final Map<Status, Set<TestResult>> toPrint = new LinkedHashMap<>(4);
+                if (statuses == null || statuses.isEmpty()) {
+                    toPrint.put(Status.PASSED, passedResults);
+                    toPrint.put(Status.FAILED, failedResults);
+                    toPrint.put(Status.ERROR, errorResults);
+                    toPrint.put(Status.SKIPPED, skippedResults);
+                } else {
+                    if (statuses.contains(Status.PASSED)) {
+                        toPrint.put(Status.PASSED, passedResults);
+                    }
+                    if (statuses.contains(Status.FAILED)) {
+                        toPrint.put(Status.FAILED, failedResults);
+                    }
+                    if (statuses.contains(Status.ERROR)) {
+                        toPrint.put(Status.ERROR, errorResults);
+                    }
+                    if (statuses.contains(Status.SKIPPED)) {
+                        toPrint.put(Status.SKIPPED, skippedResults);
+                    }
+                }
+                final Collection<Map.Entry<Status, Set<TestResult>>> entries = List.copyOf(toPrint.entrySet());
+                for (var entry : entries) {
+                    if (entry.getValue().isEmpty()) {
+                        print("No %s tests found.", entry.getKey().name());
+                    } else {
+                        printResult(entry.getKey(), entry.getValue());
+                    }
+                    print();
+                }
+            } else {
+                final List<TestResult> combined = new ArrayList<>();
+                if (statuses == null || statuses.isEmpty()) {
+                    combined.addAll(passedResults);
+                    combined.addAll(failedResults);
+                    combined.addAll(errorResults);
+                    combined.addAll(skippedResults);
+                } else {
+                    if (statuses.contains(Status.PASSED)) {
+                        combined.addAll(passedResults);
+                    }
+                    if (statuses.contains(Status.FAILED)) {
+                        combined.addAll(failedResults);
+                    }
+                    if (statuses.contains(Status.ERROR)) {
+                        combined.addAll(errorResults);
+                    }
+                    if (statuses.contains(Status.SKIPPED)) {
+                        combined.addAll(skippedResults);
+                    }
+                }
+                final Comparator<TestResult> comparator;
+                if (sortBy == SortBy.name) {
+                    combined.addAll(skippedResults);
+                    comparator = Comparator.comparing(testResult -> testResult.className);
+                } else {
+                    comparator = Comparator.comparing(testResult -> testResult.time);
+                }
+                combined.sort(comparator);
+                printSortedResult(sortBy, combined);
+            }
+            print();
+        }
+        // Print a summary
+        // Determine the output length
+        final var len = format(CommandLine.Help.Ansi.OFF, totalSummary).length() + 2;
+        print("*".repeat(len));
+        print(totalSummary);
+        print("*".repeat(len));
     }
 
     private void printResult(final Status status, final Set<TestResult> results) {
@@ -289,9 +309,6 @@ public class parsesurefire implements Callable<Integer> {
     private void printSortedResult(final SortBy sortBy, final List<TestResult> results) {
         String currentTest = null;
         BigDecimal totalTime = new BigDecimal("0.000");
-        if (reverse) {
-            Collections.reverse(results);
-        }
         for (TestResult result : results) {
             if (sortBy == SortBy.name) {
                 if (!result.className.equals(currentTest)) {
@@ -314,11 +331,11 @@ public class parsesurefire implements Callable<Integer> {
     }
 
     private void printDetail(final TestResult result) {
-        if (!summary) {
+        if (reportType != ReportType.summary) {
             print(4, "%s - Time elapsed: %s @|%s [%s]|@", result.testName, result.time,
                     getStatusColor(result.status), result.status);
         }
-        if (!summary && !result.message.isBlank()) {
+        if (reportType != ReportType.summary && !result.message.isBlank()) {
             print(8, "Reason: %s", result.message);
         }
         if (verbose && !result.detailMessage.isBlank()) {
@@ -559,6 +576,21 @@ public class parsesurefire implements Callable<Integer> {
             return String.format("%02dh, %02dm, %02ds, %03dms", hours, minutes, seconds, millis);
         }
         return String.format("%02dm, %02ds, %03dms", minutes, seconds, millis);
+    }
+
+    private enum ReportType {
+        detail,
+        summary,
+        total() {
+            @Override
+            boolean printDetail() {
+                return false;
+            }
+        };
+
+        boolean printDetail() {
+            return true;
+        }
     }
 
     private enum Status {

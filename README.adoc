@@ -42,43 +42,6 @@ Total: 2796 - PASSED: 2666 - FAILED: 0 - ERRORS: 0 - SKIPPED: 130
 Completed in 00m, 00s, 344ms
 ----
 
-[source,bash]
-----
-parse-surefire-report -h
-Usage: parse-surefire-report [-Bdhrv] [--show-path] [--summary] [-f=<format>]
-                             [-o=<output>] [--sort-by=<sortBy>] [-s=<statuses>[,
-                             <statuses>...]]... <file> [COMMAND]
-Parses a surefire report and reports information.
-      <file>               A surefire XML report or a directory which contains
-                             reports.
-                             Default: .
-  -B, --batch              Batch mode disables any colorization of the output.
-  -d, --print-details      Prints only the totals and skips any detailed
-                             reporting.
-  -f, --format=<format>    The format pattern to use for the output.
-                           The following is are the options for the summary
-                             output:
-                           %t - the total number of tests
-                           %p - the total number of passed tests
-                           %f - the total number of failed tests
-                           %e - the total number of errored tests
-                           %s - the total number of skipped tests
-                           %n - new line
-  -h, --help               Display this help message
-  -o, --output=<output>    A path to a file used of the output.
-  -r, --reverse            Prints the results in the reversed sort order.
-  -s, --status=<statuses>[,<statuses>...]
-                           Print only the specific status. This can be a comma
-                             delimited list. The options are PASSED, FAILED,
-                             ERROR, SKIPPED.
-      --show-path          Shows the path to the file parsed
-      --sort-by=<sortBy>   The order to sort the results. The options are
-                             status, name, time
-                             Default: status
-      --summary            Prints only the summary
-  -v, --verbose            Prints verbose output.
-----
-
 === 'jdk-manager`
 
 ==== Installation
