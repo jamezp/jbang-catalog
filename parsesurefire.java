@@ -294,15 +294,37 @@ public class parsesurefire implements Callable<Integer> {
         final var prefix = status.name().charAt(0) + status.name().substring(1).toLowerCase(Locale.ROOT);
         print("@|bold,white %s Tests:|@", prefix);
         String currentTest = null;
+        int totalCount = 0;
+        int count = 0;
+        final var countFormat = "@|" + getStatusColor(status) + " Total " + status.toString()
+                .toLowerCase(Locale.ROOT) + " for %s: %d|@";
         for (TestResult result : results) {
             if (!result.className.equals(currentTest)) {
-                print("@|cyan %s|@", result.className);
+                if (count > 0) {
+                    print(countFormat, currentTest, count);
+                }
+                count = 0;
+                if (reportType != ReportType.summary) {
+                    if (result.title.equals(result.className)) {
+                        print("@|cyan %s|@", result.className);
+                    } else {
+                        print("@|cyan %s: %s|@", result.title, result.className);
+                    }
+                }
                 if (verbose || showPath) {
                     print(4, "@|red file: %s|@", result.file);
                 }
             }
+            count++;
+            totalCount++;
             currentTest = result.className;
             printDetail(result);
+        }
+        if (count > 0) {
+            print(countFormat, currentTest, count);
+        }
+        if (totalCount > 0) {
+            print("@|bold,%s Total %s: %d|@", getStatusColor(status), status.toString().toLowerCase(Locale.ROOT), totalCount);
         }
     }
 
@@ -609,6 +631,7 @@ public class parsesurefire implements Callable<Integer> {
     private static class TestResult implements Comparable<TestResult> {
         private final Path file;
         private final Status status;
+        private final String title;
         private final String className;
         private final String testName;
         private final BigDecimal time;
@@ -619,7 +642,8 @@ public class parsesurefire implements Callable<Integer> {
                            final BigDecimal time, final String message, final String detailMessage) {
             this.file = file;
             this.status = status;
-            this.className = className;
+            this.title = className;
+            this.className = parseTestClassName(file, className);
             this.testName = testName;
             this.time = time;
             this.message = message == null ? "" : message;
@@ -681,6 +705,20 @@ public class parsesurefire implements Callable<Integer> {
                 return result;
             }
             return status.compareTo(o.status);
+        }
+
+        private static String parseTestClassName(final Path file, final String className) {
+            final var fileName = file.getFileName().toString();
+            if (fileName.contains(className)) {
+                return className;
+            }
+            // The file name should be TEST-${testClassName}.xml
+            final int start = fileName.indexOf("TEST-");
+            final int end = fileName.indexOf(".xml");
+            if (start != -1 && end != -1) {
+                return fileName.substring(start + 5, end).trim();
+            }
+            return className;
         }
     }
 }
