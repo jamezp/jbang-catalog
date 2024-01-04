@@ -4,11 +4,15 @@
 //DEPS org.jsoup:jsoup:1.16.1
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.PrintWriter;
 import java.io.UncheckedIOException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystem;
+import java.nio.file.FileSystemNotFoundException;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -137,39 +141,7 @@ public class parsesurefire implements Callable<Integer> {
     public Integer call() throws Exception {
         final Instant start = Instant.now();
         try {
-            final Map<Path, EnumMap<Status, Set<TestResult>>> grouped = new TreeMap<>();
-            if (Files.isDirectory(file)) {
-                final ForkJoinPool pool = new ForkJoinPool();
-                final var pattern = FileSystems.getDefault().getPathMatcher("glob:**/TEST-*.xml");
-                final var globalResults = createResultMap();
-                try (Stream<Path> files = Files.walk(file)) {
-                    files.filter(pattern::matches)
-                            .forEach(p -> pool.submit(new RecursiveAction() {
-                                @Override
-                                protected void compute() {
-                                    final EnumMap<Status, Set<TestResult>> results;
-                                    if (group) {
-                                        synchronized (grouped) {
-                                            results = grouped.computeIfAbsent(p.getParent(), (current) -> createResultMap());
-                                        }
-                                    } else {
-                                        synchronized (grouped) {
-                                            results = grouped.computeIfAbsent(file, (current) -> globalResults);
-                                        }
-                                    }
-                                    parseResults(p, results);
-                                }
-                            }));
-                }
-                pool.shutdown();
-                if (!pool.awaitTermination(60L, TimeUnit.MINUTES)) {
-                    throw new CommandLine.ExecutionException(spec.commandLine(), "Parsing did not complete within 60 minutes.");
-                }
-            } else {
-                final var results = createResultMap();
-                parseResults(file, results);
-                grouped.put(file, results);
-            }
+            final Map<Path, EnumMap<Status, Set<TestResult>>> grouped = parseFile(file);
             final EnumMap<Status, Set<TestResult>> totals = createResultMap();
             for (var group : grouped.entrySet()) {
                 final var results = group.getValue();
@@ -194,6 +166,71 @@ public class parsesurefire implements Callable<Integer> {
                 writer.close();
             }
         }
+    }
+
+    private Map<Path, EnumMap<Status, Set<TestResult>>> parseFile(final Path file) throws IOException, InterruptedException {
+        // If this is a directory, it cannot be a ZIP file
+        if (Files.isDirectory(file)) {
+            return parseFile(FileSystems.getDefault(), file);
+        }
+        // Check if this is a zip file
+        try (InputStream in = Files.newInputStream(file)) {
+            // Read the first 4 bytes
+            final byte[] bytes = new byte[4];
+            final int len = in.read(bytes);
+            if (len == 4) {
+                // The first 4 bytes are the header, we'll check to see if it's a zip file
+                final int header = bytes[0] + (bytes[1] << 8) + (bytes[2] << 16) + (bytes[3] << 24);
+                if (0x04034b50 == header) {
+                    final URI uri = URI.create("jar:" + file.toUri());
+                    FileSystem zipFs;
+                    try {
+                        zipFs = FileSystems.getFileSystem(uri);
+                    } catch (FileSystemNotFoundException ignore) {
+                        zipFs = FileSystems.newFileSystem(uri, Map.of());
+                    }
+                    return parseFile(zipFs, zipFs.getPath("/"));
+                }
+            }
+        }
+        return parseFile(FileSystems.getDefault(), file);
+    }
+
+    private Map<Path, EnumMap<Status, Set<TestResult>>> parseFile(final FileSystem fs, final Path file) throws IOException, InterruptedException {
+        final Map<Path, EnumMap<Status, Set<TestResult>>> grouped = new TreeMap<>();
+        if (Files.isDirectory(file)) {
+            final ForkJoinPool pool = new ForkJoinPool();
+            final var pattern = fs.getPathMatcher("glob:**/TEST-*.xml");
+            final var globalResults = createResultMap();
+            try (Stream<Path> files = Files.walk(file)) {
+                files.filter(pattern::matches)
+                        .forEach(p -> pool.submit(new RecursiveAction() {
+                            @Override
+                            protected void compute() {
+                                final EnumMap<Status, Set<TestResult>> results;
+                                if (group) {
+                                    synchronized (grouped) {
+                                        results = grouped.computeIfAbsent(p.getParent(), (current) -> createResultMap());
+                                    }
+                                } else {
+                                    synchronized (grouped) {
+                                        results = grouped.computeIfAbsent(file, (current) -> globalResults);
+                                    }
+                                }
+                                parseResults(p, results);
+                            }
+                        }));
+            }
+            pool.shutdown();
+            if (!pool.awaitTermination(60L, TimeUnit.MINUTES)) {
+                throw new CommandLine.ExecutionException(spec.commandLine(), "Parsing did not complete within 60 minutes.");
+            }
+        } else {
+            final var results = createResultMap();
+            parseResults(file, results);
+            grouped.put(file, results);
+        }
+        return grouped;
     }
 
     private EnumMap<Status, Set<TestResult>> createResultMap() {
