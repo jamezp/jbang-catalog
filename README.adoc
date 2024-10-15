@@ -42,7 +42,7 @@ Total: 2796 - PASSED: 2666 - FAILED: 0 - ERRORS: 0 - SKIPPED: 130
 Completed in 00m, 00s, 344ms
 ----
 
-=== 'jdk-manager`
+=== `jdk-manager`
 
 ==== Installation
 
