@@ -159,9 +159,11 @@ public class parsesurefire implements Callable<Integer> {
             }
             return 0;
         } finally {
-            spec.commandLine()
-                    .getOut()
-                    .println(format("@|bold Completed in %s|@", toHumanReadable(Duration.between(start, Instant.now()))));
+            if (verbose) {
+                spec.commandLine()
+                        .getOut()
+                        .println(format("@|bold Completed in %s|@", toHumanReadable(Duration.between(start, Instant.now()))));
+            }
             if (writer != null && output != null) {
                 writer.close();
             }
