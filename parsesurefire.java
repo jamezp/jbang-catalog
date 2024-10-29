@@ -450,20 +450,30 @@ public class parsesurefire implements Callable<Integer> {
         for (Element test : tests) {
             final Elements skipped = test.select("skipped");
             if (!skipped.isEmpty()) {
-                skippedResults.add(parseSkipped(file, test, skipped));
+                addTestResult(parseSkipped(file, test, skipped), skippedResults);
                 continue;
             }
             final Elements failure = test.select("failure");
             if (!failure.isEmpty()) {
-                failedResults.add(parseFailed(file, test, failure));
+                addTestResult(parseFailed(file, test, failure), failedResults);
                 continue;
             }
             final Elements errors = test.select("error");
             if (!errors.isEmpty()) {
-                errorResults.add(parseError(file, test, errors));
+                addTestResult(parseError(file, test, errors), errorResults);
                 continue;
             }
-            passedResults.add(TestResult.passed(file, test.attr("classname"), test.attr("name"), createTime(test.attr("time"))));
+            addTestResult(TestResult.passed(file, test.attr("classname"), test.attr("name"), createTime(test.attr("time"))),
+                    passedResults);
+        }
+    }
+
+    private void addTestResult(final TestResult result, final Set<TestResult> results) {
+        if (!results.add(result) && verbose) {
+            print("@|red Did not add result: %s|@%n@|green Duplicate        : %s|@", result, results.stream()
+                    .filter(result::equals)
+                    .findFirst()
+                    .orElse(null));
         }
     }
 
@@ -748,7 +758,7 @@ public class parsesurefire implements Callable<Integer> {
 
         private static String parseTestClassName(final Path file, final String className) {
             final var fileName = file.getFileName().toString();
-            if (fileName.contains(className)) {
+            if (fileName.contains(className) || fileName.equalsIgnoreCase("TEST-TestSuite.xml")) {
                 return className;
             }
             // The file name should be TEST-${testClassName}.xml
