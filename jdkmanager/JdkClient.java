@@ -23,12 +23,8 @@ import static jdkmanager.BaseCommand.WORK_DIR;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.net.URI;
 import java.net.URLEncoder;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -38,9 +34,6 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.PosixFilePermission;
 import java.text.DecimalFormat;
-import java.time.LocalDate;
-import java.time.ZoneId;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
@@ -52,18 +45,10 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Scanner;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
-import jakarta.json.Json;
-import jakarta.json.JsonObject;
-import jakarta.json.JsonReader;
-import jakarta.json.JsonWriter;
-import me.tongfei.progressbar.ProgressBar;
-import me.tongfei.progressbar.ProgressBarBuilder;
-import me.tongfei.progressbar.ProgressBarStyle;
 import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
 import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
@@ -73,7 +58,7 @@ import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
 /**
  * @author <a href="mailto:jperkins@redhat.com">James R. Perkins</a>
  */
-class JdkClient {
+abstract class JdkClient {
     private static final int OWNER_READ_FILEMODE = 0b100_000_000; // 0400
     private static final int OWNER_WRITE_FILEMODE = 0b010_000_000; // 0200
     private static final int OWNER_EXEC_FILEMODE = 0b001_000_000; // 0100
@@ -85,249 +70,27 @@ class JdkClient {
     private static final int OTHERS_READ_FILEMODE = 0b000_000_100; // 0004
     private static final int OTHERS_WRITE_FILEMODE = 0b000_000_010; // 0002
     private static final int OTHERS_EXEC_FILEMODE = 0b000_000_001; // 0001
-    private final BaseCommand command;
+    protected final BaseCommand command;
+    private final String baseUri;
 
-    JdkClient(final BaseCommand command) {
+    JdkClient(final BaseCommand command, final String baseUri) {
         this.command = command;
+        this.baseUri = baseUri;
     }
 
-    int latestLts() throws IOException, InterruptedException {
-        final var json = getVersions(false);
-        return json.body().getInt("most_recent_lts");
+    abstract int latestLts() throws IOException, InterruptedException;
+
+    abstract Status<Versions> getVersions(boolean refresh) throws IOException, InterruptedException;
+
+    abstract Status<Properties> getJavaInfo(Path javaHome) throws IOException, InterruptedException;
+
+    abstract CompletionStage<Integer> download(Path javaHome, int version, boolean quiet);
+
+    UriBuilder uriBuilder() {
+        return new UriBuilder(baseUri);
     }
 
-    Status<JsonObject> getVersions(final boolean refresh) throws IOException, InterruptedException {
-        final Path dir = BaseCommand.TMP_DIR.resolve("jdk-manager");
-        boolean resolve = refresh;
-        if (Files.notExists(dir)) {
-            Files.createDirectories(dir);
-            resolve = true;
-        }
-        final Path file = dir.resolve("current-versions");
-        if (Files.exists(file)) {
-            final var lastModified = Files.getLastModifiedTime(file).toInstant();
-            final var lastModDate = LocalDate.ofInstant(lastModified, ZoneId.systemDefault());
-            if (lastModDate.isBefore(LocalDate.now())) {
-                resolve = true;
-            }
-        } else {
-            resolve = true;
-        }
-        final JsonObject json;
-        if (resolve) {
-            final var uri = UriBuilder.of()
-                    .path("info")
-                    .path("available_releases")
-                    .build();
-            final HttpClient client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.ALWAYS).build();
-            final HttpRequest request = HttpRequest.newBuilder(uri)
-                    .GET()
-                    .header("accept", "application/json")
-                    .build();
-            final HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
-            try (InputStream in = response.body()) {
-                if (response.statusCode() == 200) {
-                    try (JsonWriter writer = Json.createWriter(Files.newBufferedWriter(file, StandardCharsets.UTF_8))) {
-                        json = Json.createReader(in).readObject();
-                        writer.writeObject(json);
-                    }
-                } else {
-                    if (response.statusCode() == 404) {
-                        final JsonObject errorMessage = Json.createObjectBuilder()
-                                .add("errorMessage", "Could not find resource at " + uri)
-                                .build();
-                        return new Status<>(1, errorMessage, new String(in.readAllBytes()));
-                    }
-                    try (JsonReader reader = Json.createReader(in)) {
-                        final JsonObject body = reader.readObject();
-                        command.printError("Could not determine the available versions: %s", body.getString("errorMessage"));
-                        return new Status<>(1, body, body.toString());
-                    }
-                }
-            }
-        } else {
-            try (JsonReader reader = Json.createReader(Files.newBufferedReader(file, StandardCharsets.UTF_8))) {
-                json = reader.readObject();
-            }
-        }
-        return new Status<>(0, json, json.toString());
-    }
-
-    Status<Properties> getJavaInfo(final Path javaHome) throws IOException, InterruptedException {
-        final String[] commands = {
-                javaHome.resolve("bin").resolve("java").toString(),
-                "-XshowSettings:properties",
-                "-version"
-        };
-        final Path tempFile = Files.createTempFile("jdk-info", ".out");
-        try {
-            final Process process = new ProcessBuilder(commands)
-                    .redirectErrorStream(true)
-                    .redirectOutput(ProcessBuilder.Redirect.to(tempFile.toFile()))
-                    .start();
-            final int exitCode = process.waitFor();
-            final Properties properties = new Properties();
-            final List<String> lines = Files.readAllLines(tempFile);
-            if (exitCode == 0) {
-                // Read each line looking for "Property settings:"
-                boolean inProperties = false;
-                for (var line : lines) {
-                    if (line.trim().startsWith("Property settings:")) {
-                        inProperties = true;
-                        continue;
-                    }
-                    if (inProperties) {
-                        final var trimmed = line.trim();
-                        final int i = trimmed.indexOf('=');
-                        if (i > 0) {
-                            final var key = trimmed.substring(0, i).trim();
-                            if (KnownProperties.PROPERTIES.contains(key)) {
-                                final var value = trimmed.substring(i + 1).trim();
-                                properties.setProperty(key, value);
-                            }
-                        }
-                    }
-                }
-            }
-            return new Status<>(exitCode, properties, () -> {
-                final StringBuilder builder = new StringBuilder();
-                for (String line : lines) {
-                    builder.append(line).append(System.lineSeparator());
-                }
-                return builder.toString();
-            });
-        } finally {
-            Files.deleteIfExists(tempFile);
-        }
-    }
-
-    CompletionStage<Integer> download(final Path javaHome, final int version, final boolean quiet) {
-
-        if (command.refresh || Files.notExists(javaHome)) {
-            final var earlyAccess = isEarlyAccess(version);
-            final var uri = downloadUri(version, earlyAccess);
-            if (command.verbose) {
-                command.print("Downloading from %s", uri);
-            }
-            final HttpClient client = HttpClient.newBuilder()
-                    .followRedirects(HttpClient.Redirect.ALWAYS)
-                    .build();
-            final HttpRequest request = HttpRequest.newBuilder(uri)
-                    .GET()
-                    .build();
-            return client.sendAsync(request, HttpResponse.BodyHandlers.ofInputStream())
-                    .thenApply(response -> {
-                        try {
-                            try (InputStream in = response.body()) {
-                                if (response.statusCode() == 200) {
-                                    // Get the content-disposition to get the file name
-                                    final var contentDisposition = response.headers()
-                                            .firstValue("content-disposition")
-                                            .orElseThrow(
-                                                    () -> new RuntimeException(String.format("Failed to find the content disposition in %s", response.headers()
-                                                            .map())));
-                                    // Find the file name
-                                    final String filename = getFilename(contentDisposition);
-                                    if (filename == null) {
-                                        command.printError("Could not determine the filename based on the response headers.");
-                                        return 1;
-                                    }
-                                    final Path download = WORK_DIR.resolve(filename);
-                                    if (Files.notExists(download)) {
-                                        if (quiet) {
-                                            Files.copy(in, download, StandardCopyOption.REPLACE_EXISTING);
-                                        } else {
-                                            final long contentLength = response.headers()
-                                                    .firstValueAsLong("content-length")
-                                                    .orElse(-1L);
-                                            try (
-                                                    ProgressBar progressBar = new ProgressBarBuilder()
-                                                            .setInitialMax(contentLength)
-                                                            .setSpeedUnit(ChronoUnit.MINUTES)
-                                                            .setTaskName("Downloading: ")
-                                                            .setUnit(SizeUnit.MEGABYTE.abbreviation(), SizeUnit.MEGABYTE.toBytes(1))
-                                                            .setStyle(ProgressBarStyle.ASCII)
-                                                            .build();
-                                                    OutputStream out = Files.newOutputStream(download)
-                                            ) {
-                                                final byte[] buffer = new byte[4096];
-                                                int len;
-                                                while ((len = in.read(buffer)) > 0) {
-                                                    out.write(buffer, 0, len);
-                                                    progressBar.stepBy(len);
-                                                }
-                                                if (command.verbose) {
-                                                    command.print("Downloaded %s%n", download);
-                                                }
-                                            }
-                                        }
-                                    }
-                                    deleteDirectory(javaHome);
-                                    Files.createDirectories(javaHome);
-                                    final Path path;
-                                    if (filename.endsWith("tar.gz") || filename.endsWith("tgz")) {
-                                        path = untargz(download);
-                                        if (path == null) {
-                                            command.printError("Could not untar the path %s.", download);
-                                            return 1;
-                                        }
-                                        Files.move(path, javaHome, StandardCopyOption.REPLACE_EXISTING);
-                                    } else {
-                                        unzip(download, javaHome);
-                                    }
-                                    // Delete the download
-                                    Files.deleteIfExists(download);
-                                } else {
-                                    try (JsonReader reader = Json.createReader(in)) {
-                                        command.printError("Request failed for version %d: %s", version, reader.readObject()
-                                                .getString("errorMessage"));
-                                    }
-                                    return 1;
-                                }
-                            }
-                        } catch (IOException e) {
-                            command.printError("Failed to install JDK %s: %s", version, e.getMessage());
-                            return 1;
-                        }
-                        return 0;
-                    });
-        }
-        return CompletableFuture.completedFuture(0);
-    }
-
-    private boolean isEarlyAccess(final int version) {
-        try {
-            final Status<JsonObject> status = getVersions(false);
-            if (status.exitStatus() == 0) {
-                final JsonObject json = status.body();
-                final var tip = json.getInt("tip_version");
-                final var featureVersion = json.getInt("most_recent_feature_version");
-                final var recentRelease = json.getInt("most_recent_feature_release");
-                return version > recentRelease;
-            }
-        } catch (IOException | InterruptedException e) {
-            command.printError("Failed to determine the available JDK versions: %s", e.getMessage());
-        }
-        return false;
-    }
-
-    private URI downloadUri(final int version, final boolean earlyAccess) {
-        return UriBuilder.of()
-                .path("binary")
-                .path("latest")
-                .path(version)
-                .path(earlyAccess ? "ea" : "ga")
-                .path(BaseCommand.os())
-                .path(BaseCommand.arch())
-                .path("jdk")
-                .path("hotspot")
-                .path("normal")
-                .path("eclipse")
-                .queryParam("project", "jdk")
-                .build();
-    }
-
-    private static Path untargz(final Path archiveFile) throws IOException {
+    static Path untargz(final Path archiveFile) throws IOException {
         Path firstDir = null;
 
         try (TarArchiveInputStream in = new TarArchiveInputStream(new GzipCompressorInputStream(Files.newInputStream(archiveFile)))) {
@@ -353,7 +116,7 @@ class JdkClient {
         }
     }
 
-    private static void unzip(final Path zip, final Path targetDir) throws IOException {
+    static void unzip(final Path zip, final Path targetDir) throws IOException {
         try (ZipFile zipFile = new ZipFile(zip.toFile())) {
             final Enumeration<ZipArchiveEntry> entries = zipFile.getEntries();
             while (entries.hasMoreElements()) {
@@ -387,7 +150,7 @@ class JdkClient {
         }
     }
 
-    private static String getFilename(final String contentDisposition) {
+    static String getFilename(final String contentDisposition) {
         final String filename;
         final var key = "filename=";
         int start = contentDisposition.indexOf(key);
@@ -405,7 +168,7 @@ class JdkClient {
         return filename;
     }
 
-    private static void deleteDirectory(final Path dir) throws IOException {
+    static void deleteDirectory(final Path dir) throws IOException {
         if (Files.exists(dir)) {
             Files.walkFileTree(dir, new SimpleFileVisitor<>() {
                 @Override
@@ -423,7 +186,7 @@ class JdkClient {
         }
     }
 
-    private static Set<PosixFilePermission> toPosixFilePermissions(final int octalFileMode) {
+    static Set<PosixFilePermission> toPosixFilePermissions(final int octalFileMode) {
         final Set<PosixFilePermission> permissions = new LinkedHashSet<>();
         // Owner
         if ((octalFileMode & OWNER_READ_FILEMODE) == OWNER_READ_FILEMODE) {
@@ -465,14 +228,14 @@ class JdkClient {
     }
 
     @SuppressWarnings("SameParameterValue")
-    private static class UriBuilder {
+    static class UriBuilder {
 
         private final String base;
         private final List<String> paths;
         private final Map<String, String> queryParams;
 
-        private UriBuilder() {
-            this.base = "https://api.adoptium.net/v3";
+        private UriBuilder(final String base) {
+            this.base = base;
             paths = new ArrayList<>();
             queryParams = new LinkedHashMap<>();
         }
@@ -496,10 +259,6 @@ class JdkClient {
             return this;
         }
 
-        static UriBuilder of() {
-            return new UriBuilder();
-        }
-
         URI build() {
             final StringBuilder builder = new StringBuilder();
             builder.append(base);
@@ -521,7 +280,7 @@ class JdkClient {
         }
     }
 
-    private enum SizeUnit {
+    enum SizeUnit {
         BYTE(1L, "B") {
             @Override
             public String toString(final long size) {

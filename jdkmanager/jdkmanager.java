@@ -5,7 +5,7 @@
 //DEPS org.eclipse.parsson:parsson:1.1.4
 //DEPS org.apache.commons:commons-compress:1.24.0
 //DEPS me.tongfei:progressbar:0.10.0
-//SOURCES BaseCommand.java,Install.java,JdkList.java,Info.java,JdkClient.java
+//SOURCES *.java
 
 package jdkmanager;
 
