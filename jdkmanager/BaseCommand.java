@@ -71,7 +71,7 @@ abstract class BaseCommand implements Callable<Integer> {
 
     @Override
     public final Integer call() throws Exception {
-        return call(new JdkClient(this));
+        return call(new AdoptiumJdkClient(this));
     }
 
     abstract Integer call(JdkClient client) throws Exception;

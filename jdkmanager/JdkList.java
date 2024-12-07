@@ -69,34 +69,24 @@ class JdkList extends BaseCommand {
         }
         final var status = client.getVersions(refresh);
         if (status.exitStatus() > 0) {
-            printError("Failed to determine the available JDK's: %s", status.body().getString("errorMessage"));
+            printError("Failed to determine the available JDK's: %s", status.rawData());
             return status.exitStatus();
         } else {
-            final var json = status.body();
-            final var latestLts = json.getInt("most_recent_lts");
-            final var latest = json.getInt("most_recent_feature_release");
-            final var lts = json.getJsonArray("available_lts_releases");
-            final var available = json.getJsonArray("available_releases");
-
+            final var versions = status.body();
             print("@|bold LTS Versions|@");
-            lts.forEach(listConsumer(latestLts, true));
+            versions.lts().forEach(listConsumer(true));
             print("@|bold Versions|@");
-            available.forEach(listConsumer(latest, false));
+            versions.available().forEach(listConsumer(false));
         }
         return 0;
     }
 
-    private Consumer<JsonValue> listConsumer(final int latest, final boolean mark) {
+    private Consumer<Version> listConsumer(final boolean mark) {
         return v -> {
-            if (v.getValueType() == JsonValue.ValueType.NUMBER) {
-                final JsonNumber version = (JsonNumber) v;
-                if (mark && version.intValue() == latest) {
-                    print(1, "@|bold,cyan *%s|@", version);
-                } else {
-                    print(2, v);
-                }
+            if (mark && v.latest()) {
+                print(1, "@|bold,cyan *%s|@", v.version());
             } else {
-                print(2, v);
+                print(2, v.version());
             }
         };
     }
