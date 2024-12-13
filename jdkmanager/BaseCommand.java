@@ -19,13 +19,12 @@
 
 package jdkmanager;
 
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.Locale;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.concurrent.Callable;
-import java.util.concurrent.atomic.AtomicReference;
 
 import picocli.CommandLine;
 
@@ -34,22 +33,8 @@ import picocli.CommandLine;
  */
 abstract class BaseCommand implements Callable<Integer> {
 
-    enum OS {
-        linux,
-        alpine_linux,
-        mac,
-        windows,
-        aix,
-        unknown;
-    }
-
-    static final Path TMP_DIR = Path.of(System.getProperty("java.io.tmpdir"));
-    static final Path USER_DIR = Path.of(System.getProperty("user.home"));
-    static final Path WORK_DIR = USER_DIR.resolve(".jdk-manager");
-
-    private static final AtomicReference<String> ARCH_REF = new AtomicReference<>();
-
-    private static final AtomicReference<OS> OS_REF = new AtomicReference<>();
+    @CommandLine.Option(names = {"--distribution"}, description = "The name of the distribution to use. Examples: temurin, semeru, zulu")
+    String distribution;
 
     @SuppressWarnings("unused")
     @CommandLine.Option(names = {"-h", "--help"}, usageHelp = true, description = "Display this help message")
@@ -64,6 +49,8 @@ abstract class BaseCommand implements Callable<Integer> {
     @CommandLine.Spec
     CommandLine.Model.CommandSpec spec;
 
+    boolean distributionSet = false;
+
     private PrintWriter stdout;
 
     private PrintWriter stderr;
@@ -71,10 +58,52 @@ abstract class BaseCommand implements Callable<Integer> {
 
     @Override
     public final Integer call() throws Exception {
-        return call(new AdoptiumJdkClient(this));
+        try {
+            // TODO (jrp) we need to do something with distribution here. We need to use https://api.foojay.io/disco/v3.0/distributions?include_versions=false&include_synonyms=true
+            // TODO (jrp) to download a valid list of distributions
+            if (distribution == null) {
+                distribution = "temurin";
+                try (JdkClient client = new AdoptiumJdkClient(this)) {
+                    return call(client);
+                }
+            }
+            if (refresh) {
+                Environment.deleteCache();
+            }
+            distributionSet = true;
+            try (JdkClient client = new FoojayJdkClient(this)) {
+                final Distributions distributions = client.supportedDistributions();
+                if (distributions.isSupported(distribution)) {
+                    return call(client);
+                }
+                printError("Failed to find supported distribution: %s", distribution);
+                return 1;
+            }
+        } catch (Throwable e) {
+            final Throwable cause;
+            if (e.getCause() != null) {
+                cause = e.getCause();
+            } else {
+                cause = e;
+            }
+            printError(cause, "Failed to invoke %s: %s", spec.name(), cause.getMessage());
+            return 1;
+        }
     }
 
     abstract Integer call(JdkClient client) throws Exception;
+
+    Path distributionDir() throws IOException {
+        final Path dir = Environment.WORK_DIR.resolve(distribution);
+        if (Files.notExists(dir)) {
+            if (Environment.supportsPosix()) {
+                Files.createDirectories(dir, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
+            } else {
+                Files.createDirectories(dir);
+            }
+        }
+        return dir;
+    }
 
     void print() {
         final PrintWriter writer = getStdout();
@@ -105,6 +134,13 @@ abstract class BaseCommand implements Callable<Integer> {
 
     void printError(final String fmt, final Object... args) {
         print(getStderr(), 0, "@|red " + fmt + "|@", args);
+    }
+
+    void printError(final Throwable cause, final String fmt, final Object... args) {
+        print(getStderr(), 0, "@|red " + fmt + "|@", args);
+        if (verbose) {
+            cause.printStackTrace(getStderr());
+        }
     }
 
     private void print(final PrintWriter writer, final int padding, final String fmt, final Object... args) {
@@ -139,63 +175,4 @@ abstract class BaseCommand implements Callable<Integer> {
         return ansi.string(value);
     }
 
-    static boolean isWindows() {
-        return os() == OS.windows;
-    }
-
-    static boolean isNotWindows() {
-        return os() != OS.windows;
-    }
-
-    static String arch() {
-        return ARCH_REF.updateAndGet(arch -> {
-            if (arch == null) {
-                final var archProp = System.getProperty("os.arch")
-                        .toLowerCase(Locale.ROOT)
-                        .replaceAll("[^a-z0-9]+", "");
-                if (archProp.matches("^(x8664|amd64|ia32e|em64t|x64)$")) {
-                    return "x64";
-                } else if (archProp.matches("^(x8632|x86|i[3-6]86|ia32|x32)$")) {
-                    return "x32";
-                } else if (archProp.matches("^(aarch64)$")) {
-                    return "aarch64";
-                } else if (archProp.matches("^(ppc64)$")) {
-                    return "ppc64";
-                } else if (archProp.matches("^(ppc64le)$")) {
-                    return "ppc64le";
-                } else if (archProp.matches("^(s390x)$")) {
-                    return "s390x";
-                } else if (archProp.matches("^(arm64)$")) {
-                    return "arm64";
-                } else {
-                    throw new RuntimeException("Unknown architecture " + archProp);
-                }
-            }
-            return arch;
-        });
-    }
-
-    static OS os() {
-        return OS_REF.updateAndGet(os -> {
-            if (os == null) {
-                final var osName = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-                if (osName.startsWith("mac") || osName.startsWith("osx")) {
-                    return OS.mac;
-                } else if (osName.startsWith("linux")) {
-                    if (Files.exists(Paths.get("/etc/alpine-release"))) {
-                        return OS.alpine_linux;
-                    } else {
-                        return OS.linux;
-                    }
-                } else if (osName.startsWith("win")) {
-                    return OS.windows;
-                } else if (osName.startsWith("aix")) {
-                    return OS.aix;
-                } else {
-                    return OS.unknown;
-                }
-            }
-            return os;
-        });
-    }
 }

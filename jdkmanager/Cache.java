@@ -19,16 +19,36 @@
 
 package jdkmanager;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDate;
+import java.time.ZoneId;
+
 /**
  * @author <a href="mailto:jperkins@redhat.com">James R. Perkins</a>
  */
-record Version(boolean latest, boolean lts, int version, boolean earlyAccess) implements Comparable<Version> {
-    public Version() {
-        this(false, false, -1, false);
+public record Cache(Path file) {
+
+    // TODO (jrp) do we even need this?
+    boolean isExpired() {
+        try {
+            if (Files.exists(file)) {
+                final var lastModified = Files.getLastModifiedTime(file).toInstant();
+                final var lastModDate = LocalDate.ofInstant(lastModified, ZoneId.systemDefault());
+                if (lastModDate.isBefore(LocalDate.now())) {
+                    return true;
+                }
+            } else {
+                return true;
+            }
+        } catch (IOException e) {
+
+        }
+        return false;
     }
 
-    @Override
-    public int compareTo(final Version o) {
-        return Integer.compare(version, o.version);
+    boolean requiresDownload() {
+        return Files.notExists(file) || isExpired();
     }
 }

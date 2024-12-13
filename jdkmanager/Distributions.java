@@ -19,16 +19,28 @@
 
 package jdkmanager;
 
+import java.util.Iterator;
+import java.util.Set;
+
 /**
  * @author <a href="mailto:jperkins@redhat.com">James R. Perkins</a>
  */
-record Version(boolean latest, boolean lts, int version, boolean earlyAccess) implements Comparable<Version> {
-    public Version() {
-        this(false, false, -1, false);
+record Distributions(Set<Distribution> distributions) implements Iterable<Distribution> {
+
+    boolean isSupported(final String name) {
+        for (Distribution distribution : this) {
+            if (distribution.name().equals(name)) {
+                return true;
+            }
+            if (distribution.synonyms().contains(name)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
-    public int compareTo(final Version o) {
-        return Integer.compare(version, o.version);
+    public Iterator<Distribution> iterator() {
+        return distributions.iterator();
     }
 }

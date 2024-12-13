@@ -67,7 +67,7 @@ class Info extends BaseCommand {
             return 1;
         }
         if (version > 0) {
-            final Path javaHome = WORK_DIR.resolve("jdk-" + version);
+            final Path javaHome = distributionDir().resolve("jdk-" + version);
             if (Files.notExists(javaHome)) {
                 if (downloadIfMissing) {
                     // TODO (jrp) we need to determine this somehow

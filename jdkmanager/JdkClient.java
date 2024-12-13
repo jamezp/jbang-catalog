@@ -19,135 +19,79 @@
 
 package jdkmanager;
 
-import static jdkmanager.BaseCommand.WORK_DIR;
-
 import java.io.IOException;
-import java.io.InputStream;
 import java.net.URI;
 import java.net.URLEncoder;
+import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.StandardCopyOption;
-import java.nio.file.attribute.BasicFileAttributes;
-import java.nio.file.attribute.PosixFilePermission;
 import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Enumeration;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
-import java.util.Scanner;
-import java.util.Set;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
-
-import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
-import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
-import org.apache.commons.compress.archivers.zip.ZipFile;
-import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
+import java.util.stream.Stream;
 
 /**
  * @author <a href="mailto:jperkins@redhat.com">James R. Perkins</a>
  */
-abstract class JdkClient {
-    private static final int OWNER_READ_FILEMODE = 0b100_000_000; // 0400
-    private static final int OWNER_WRITE_FILEMODE = 0b010_000_000; // 0200
-    private static final int OWNER_EXEC_FILEMODE = 0b001_000_000; // 0100
-
-    private static final int GROUP_READ_FILEMODE = 0b000_100_000; // 0040
-    private static final int GROUP_WRITE_FILEMODE = 0b000_010_000; // 0020
-    private static final int GROUP_EXEC_FILEMODE = 0b000_001_000; // 0010
-
-    private static final int OTHERS_READ_FILEMODE = 0b000_000_100; // 0004
-    private static final int OTHERS_WRITE_FILEMODE = 0b000_000_010; // 0002
-    private static final int OTHERS_EXEC_FILEMODE = 0b000_000_001; // 0001
+abstract class JdkClient implements AutoCloseable {
     protected final BaseCommand command;
     private final String baseUri;
+    protected final HttpClient httpClient;
 
     JdkClient(final BaseCommand command, final String baseUri) {
         this.command = command;
         this.baseUri = baseUri;
+        httpClient = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.ALWAYS).build();
     }
 
-    abstract int latestLts() throws IOException, InterruptedException;
+    // TODO (jrp) this needs to be implemented here and come from the foojay API
+    abstract Distributions supportedDistributions() throws IOException, InterruptedException;
 
-    abstract Status<Versions> getVersions(boolean refresh) throws IOException, InterruptedException;
+    int latestLts() throws IOException, InterruptedException {
+        final var versions = getVersions();
+        return versions.body().latestLts().version();
+    }
+
+    // TODO (jrp) should this really be he default?
+    Version version(int majorVersion) throws IOException, InterruptedException {
+        final Status<Versions> versionStatus = getVersions();
+        if (versionStatus.exitStatus() == 0) {
+            final Versions versions = versionStatus.body();
+            return Stream.concat(versions.lts().stream(), versions.available().stream())
+                    .filter(v -> v.version() == majorVersion)
+                    .findFirst()
+                    .orElseThrow(() -> new RuntimeException("Version " + majorVersion + " not found"));
+        }
+        throw new RuntimeException(String.format("Could not find version %d: %s", majorVersion, versionStatus.rawData()
+                .get()));
+    }
+
+    abstract Status<Versions> getVersions() throws IOException, InterruptedException;
 
     abstract Status<Properties> getJavaInfo(Path javaHome) throws IOException, InterruptedException;
 
-    abstract CompletionStage<Integer> download(Path javaHome, int version, boolean quiet);
+    abstract CompletionStage<Integer> download(Path javaHome, int jdkVersion, boolean quiet);
 
     UriBuilder uriBuilder() {
         return new UriBuilder(baseUri);
     }
 
-    static Path untargz(final Path archiveFile) throws IOException {
-        Path firstDir = null;
-
-        try (TarArchiveInputStream in = new TarArchiveInputStream(new GzipCompressorInputStream(Files.newInputStream(archiveFile)))) {
-            TarArchiveEntry entry;
-            while ((entry = in.getNextTarEntry()) != null) {
-                Path extractTarget = WORK_DIR.resolve(entry.getName());
-                if (entry.isDirectory()) {
-                    final Path dir = Files.createDirectories(extractTarget);
-                    if (firstDir == null) {
-                        firstDir = dir;
-                    }
-                } else {
-                    Files.createDirectories(extractTarget.getParent());
-                    Files.copy(in, extractTarget, StandardCopyOption.REPLACE_EXISTING);
-                    final var mode = entry.getMode();
-                    if (mode != 0 && BaseCommand.isNotWindows()) {
-                        Files.setPosixFilePermissions(extractTarget, toPosixFilePermissions(mode));
-                        Files.setLastModifiedTime(extractTarget, entry.getLastModifiedTime());
-                    }
-                }
-            }
-            return firstDir;
-        }
+    Cache versionsJson() throws IOException {
+        return Environment.resolveCacheFile(String.format("%s-versions.json", command.distribution));
     }
 
-    static void unzip(final Path zip, final Path targetDir) throws IOException {
-        try (ZipFile zipFile = new ZipFile(zip.toFile())) {
-            final Enumeration<ZipArchiveEntry> entries = zipFile.getEntries();
-            while (entries.hasMoreElements()) {
-                final ZipArchiveEntry zipEntry = entries.nextElement();
-                final Path entry = Path.of(zipEntry.getName());
-                // Skip the base directory of the zip file
-                if (entry.getNameCount() == 1) {
-                    continue;
-                }
-                // Remove the base directory of the zip
-                final var target = targetDir.resolve(entry.subpath(1, entry.getNameCount())).normalize();
-                if (zipEntry.isDirectory()) {
-                    Files.createDirectories(target);
-                } else if (zipEntry.isUnixSymlink()) {
-                    final Scanner s = new Scanner(zipFile.getInputStream(zipEntry)).useDelimiter("\\A");
-                    final String result = s.hasNext() ? s.next() : "";
-                    Files.createSymbolicLink(target, Path.of(result));
-                } else {
-                    if (Files.notExists(target.getParent())) {
-                        Files.createDirectories(target.getParent());
-                    }
-                    try (InputStream zis = zipFile.getInputStream(zipEntry)) {
-                        Files.copy(zis, target, StandardCopyOption.REPLACE_EXISTING);
-                    }
-                    final int mode = zipEntry.getUnixMode();
-                    if (mode != 0 && BaseCommand.isNotWindows()) {
-                        Files.setPosixFilePermissions(target, toPosixFilePermissions(mode));
-                    }
-                }
-            }
-        }
+    @Override
+    public void close() {
+        //httpClient.close();
     }
 
     static String getFilename(final String contentDisposition) {
@@ -166,59 +110,6 @@ abstract class JdkClient {
             return null;
         }
         return filename;
-    }
-
-    static void deleteDirectory(final Path dir) throws IOException {
-        if (Files.exists(dir)) {
-            Files.walkFileTree(dir, new SimpleFileVisitor<>() {
-                @Override
-                public FileVisitResult visitFile(final Path file, final BasicFileAttributes attrs) throws IOException {
-                    Files.delete(file);
-                    return FileVisitResult.CONTINUE;
-                }
-
-                @Override
-                public FileVisitResult postVisitDirectory(final Path dir, final IOException exc) throws IOException {
-                    Files.delete(dir);
-                    return FileVisitResult.CONTINUE;
-                }
-            });
-        }
-    }
-
-    static Set<PosixFilePermission> toPosixFilePermissions(final int octalFileMode) {
-        final Set<PosixFilePermission> permissions = new LinkedHashSet<>();
-        // Owner
-        if ((octalFileMode & OWNER_READ_FILEMODE) == OWNER_READ_FILEMODE) {
-            permissions.add(PosixFilePermission.OWNER_READ);
-        }
-        if ((octalFileMode & OWNER_WRITE_FILEMODE) == OWNER_WRITE_FILEMODE) {
-            permissions.add(PosixFilePermission.OWNER_WRITE);
-        }
-        if ((octalFileMode & OWNER_EXEC_FILEMODE) == OWNER_EXEC_FILEMODE) {
-            permissions.add(PosixFilePermission.OWNER_EXECUTE);
-        }
-        // Group
-        if ((octalFileMode & GROUP_READ_FILEMODE) == GROUP_READ_FILEMODE) {
-            permissions.add(PosixFilePermission.GROUP_READ);
-        }
-        if ((octalFileMode & GROUP_WRITE_FILEMODE) == GROUP_WRITE_FILEMODE) {
-            permissions.add(PosixFilePermission.GROUP_WRITE);
-        }
-        if ((octalFileMode & GROUP_EXEC_FILEMODE) == GROUP_EXEC_FILEMODE) {
-            permissions.add(PosixFilePermission.GROUP_EXECUTE);
-        }
-        // Others
-        if ((octalFileMode & OTHERS_READ_FILEMODE) == OTHERS_READ_FILEMODE) {
-            permissions.add(PosixFilePermission.OTHERS_READ);
-        }
-        if ((octalFileMode & OTHERS_WRITE_FILEMODE) == OTHERS_WRITE_FILEMODE) {
-            permissions.add(PosixFilePermission.OTHERS_WRITE);
-        }
-        if ((octalFileMode & OTHERS_EXEC_FILEMODE) == OTHERS_EXEC_FILEMODE) {
-            permissions.add(PosixFilePermission.OTHERS_EXECUTE);
-        }
-        return Set.copyOf(permissions);
     }
 
     record Status<T>(int exitStatus, T body, Supplier<String> rawData) {

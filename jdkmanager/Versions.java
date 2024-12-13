@@ -19,14 +19,14 @@
 
 package jdkmanager;
 
-import java.util.List;
+import java.util.Set;
 
 /**
  * @author <a href="mailto:jperkins@redhat.com">James R. Perkins</a>
  */
 record Versions(Version latestLts, Version latest,
-                List<Version> lts, List<Version> available) {
+                Set<Version> lts, Set<Version> available) {
     public Versions() {
-        this(new Version(), new Version(), List.of(), List.of());
+        this(new Version(), new Version(), Set.of(), Set.of());
     }
 }

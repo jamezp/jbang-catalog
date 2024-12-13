@@ -26,8 +26,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
-import jakarta.json.JsonNumber;
-import jakarta.json.JsonValue;
 import picocli.AutoComplete;
 import picocli.CommandLine;
 
@@ -45,9 +43,23 @@ class JdkList extends BaseCommand {
     Integer call(final JdkClient client) throws Exception {
         if (local) {
             final AtomicInteger exitCode = new AtomicInteger(0);
-            try (Stream<Path> paths = Files.list(WORK_DIR)) {
-                paths.forEach(dir -> {
-                    if (Files.exists(dir.resolve("bin").resolve(isWindows() ? "java.exe" : "java"))) {
+            final Path workDir;
+            final int depth;
+            if (distributionSet) {
+                workDir = distributionDir();
+                depth = 1;
+            } else {
+                workDir = Environment.WORK_DIR;
+                depth = 2;
+            }
+            if (Files.notExists(workDir)) {
+                print("No JDK's installed for %s", distribution);
+                return 0;
+            }
+            try (Stream<Path> paths = Files.walk(workDir, depth)) {
+                paths.sorted()
+                        .forEachOrdered(dir -> {
+                    if (Files.exists(dir.resolve("bin").resolve(Environment.isWindows() ? "java.exe" : "java"))) {
                         try {
                             final var status = client.getJavaInfo(dir);
                             if (status.exitStatus() > 0) {
@@ -67,15 +79,15 @@ class JdkList extends BaseCommand {
                 return exitCode.get();
             }
         }
-        final var status = client.getVersions(refresh);
+        final var status = client.getVersions();
         if (status.exitStatus() > 0) {
-            printError("Failed to determine the available JDK's: %s", status.rawData());
+            printError("Failed to determine the available JDK's: %s", status.rawData().get());
             return status.exitStatus();
         } else {
             final var versions = status.body();
-            print("@|bold LTS Versions|@");
+            print("@|bold LTS Versions for %s|@", distribution);
             versions.lts().forEach(listConsumer(true));
-            print("@|bold Versions|@");
+            print("@|bold Versions for %s|@", distribution);
             versions.available().forEach(listConsumer(false));
         }
         return 0;

@@ -1,4 +1,4 @@
-///usr/bin/env jbang "$0" "$@" ; exit $?
+/// usr/bin/env jbang "$0" "$@" ; exit $?
 //JAVA 17+
 //DEPS info.picocli:picocli:4.7.3
 //DEPS jakarta.json:jakarta.json-api:2.1.2
@@ -9,7 +9,7 @@
 
 package jdkmanager;
 
-import java.nio.file.Files;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
@@ -35,12 +35,29 @@ public class jdkmanager extends BaseCommand implements Callable<Integer> {
     }
 
     public static void main(String... args) throws Exception {
+        // Load the environment and check for any issues
+        final boolean verbose = args != null && (List.of(args).contains("--verbose") || List.of(args).contains("-v"));
+        try {
+            final var workDir = Environment.WORK_DIR;
+            if (verbose) {
+                System.out.printf("Working Directory: %s%n", workDir);
+            }
+        } catch (Throwable t) {
+            final Throwable cause;
+            if (t.getCause() != null) {
+                cause = t.getCause();
+            } else {
+                cause = t;
+            }
+            System.err.printf("Failed to initialize environment: %s%n", cause.getMessage());
+            if (verbose) {
+                cause.printStackTrace(System.err);
+            }
+            System.exit(1);
+        }
         final CommandLine commandLine = new CommandLine(new jdkmanager());
         commandLine.setCaseInsensitiveEnumValuesAllowed(true);
         disableGenerateCompletion(commandLine.getSubcommands().entrySet());
-        if (Files.notExists(WORK_DIR)) {
-            Files.createDirectories(WORK_DIR);
-        }
         final int exitStatus = commandLine.execute(args);
         System.exit(exitStatus);
     }

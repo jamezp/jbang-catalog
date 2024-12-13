@@ -19,6 +19,10 @@
 
 package jdkmanager;
 
+import static jdkmanager.Environment.CACHE_DIR;
+import static jdkmanager.Environment.arch;
+import static jdkmanager.Environment.os;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -38,13 +42,18 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 
 import jakarta.json.Json;
-import jakarta.json.JsonNumber;
+import jakarta.json.JsonArray;
 import jakarta.json.JsonObject;
 import jakarta.json.JsonReader;
+import jakarta.json.JsonString;
 import jakarta.json.JsonValue;
 import jakarta.json.JsonWriter;
+import jdkmanager.Environment.OS;
 import me.tongfei.progressbar.ProgressBar;
 import me.tongfei.progressbar.ProgressBarBuilder;
 import me.tongfei.progressbar.ProgressBarStyle;
@@ -52,16 +61,50 @@ import me.tongfei.progressbar.ProgressBarStyle;
 /**
  * @author <a href="mailto:jperkins@redhat.com">James R. Perkins</a>
  */
-class AdoptiumJdkClient extends JdkClient {
-
-    AdoptiumJdkClient(final BaseCommand command) {
-        super(command, "https://api.adoptium.net/v3");
+class FoojayJdkClient extends JdkClient {
+    FoojayJdkClient(final BaseCommand command) {
+        super(command, "https://api.foojay.io/disco/v3.0");
     }
 
     @Override
-    Distributions supportedDistributions() {
-        return new Distributions(Set.of(new Distribution("temurin", Set.of("temurin", "Temurin", "TEMURIN"))));
+    Distributions supportedDistributions() throws IOException, InterruptedException {
+        // https://api.foojay.io/disco/v3.0/distributions?include_versions=false&include_synonyms=true
+        final Path file = CACHE_DIR.resolve("foojay-distributions.json");
+        if (Files.notExists(file)) {
+            final URI uri = uriBuilder()
+                    .path("distributions")
+                    .queryParam("include_versions", "false")
+                    .queryParam("include_synonyms", "true")
+                    .build();
+            final HttpRequest request = HttpRequest.newBuilder(uri).GET().build();
+            final HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            if (response.statusCode() != 200) {
+                throw new RuntimeException("Unexpected response code: " + response.statusCode());
+            }
+            Files.copy(response.body(), file, StandardCopyOption.REPLACE_EXISTING);
+        }
+        final Set<Distribution> distributions = new TreeSet<>();
+        try (JsonReader reader = Json.createReader(Files.newBufferedReader(file, StandardCharsets.UTF_8))) {
+            final JsonObject json = reader.readObject();
+            final JsonArray jsonArray = json.getJsonArray("result");
+            jsonArray.forEach(jsonValue -> {
+                if (jsonValue instanceof final JsonObject dist) {
+                    final Set<String> synonyms;
+                    if (dist.containsKey("synonyms")) {
+                        synonyms = dist.getJsonArray("synonyms")
+                                .stream()
+                                .map(v -> ((JsonString) v).getString())
+                                .collect(Collectors.toSet());
+                    } else {
+                        synonyms = Set.of();
+                    }
+                    distributions.add(new Distribution(dist.getString("name"), synonyms));
+                }
+            });
+        }
+        return new Distributions(distributions);
     }
+
 
     @Override
     Status<Versions> getVersions() throws IOException, InterruptedException {
@@ -70,36 +113,41 @@ class AdoptiumJdkClient extends JdkClient {
             return new Status<>(status.exitStatus(), new Versions(), status.rawData());
         }
         final JsonObject json = status.body();
-        final var latestLts = json.getInt("most_recent_lts");
-        final var latest = json.getInt("most_recent_feature_release");
-        final var lts = json.getJsonArray("available_lts_releases");
-        final var available = json.getJsonArray("available_releases");
 
         final Set<Version> ltsVersions = new TreeSet<>();
         final Set<Version> availableVersions = new TreeSet<>();
 
-        lts.forEach((jsonValue -> {
-            if (jsonValue.getValueType() == JsonValue.ValueType.NUMBER) {
-                final int v = ((JsonNumber) jsonValue).intValue();
-                ltsVersions.add(new Version(v == latestLts, true, v, v > latest));
-            } else {
-                // TODO (jrp) what do we do here????
-                command.printError("Version not a number: %s", jsonValue);
-            }
-        }));
+        final JsonArray results = json.getJsonArray("result");
+        final AtomicBoolean latestLtsFound = new AtomicBoolean();
+        final AtomicBoolean latestFound = new AtomicBoolean();
+        final AtomicReference<Version> latestVersion = new AtomicReference<>();
+        final AtomicReference<Version> latestLtsVersion = new AtomicReference<>();
 
-        available.forEach((jsonValue -> {
-            if (jsonValue.getValueType() == JsonValue.ValueType.NUMBER) {
-                final int v = ((JsonNumber) jsonValue).intValue();
-                availableVersions.add(new Version(v == latest, false, v, v > latest));
-            } else {
-                // TODO (jrp) what do we do here????
-                command.printError("Version not a number: %s", jsonValue);
+        results.forEach((jsonValue) -> {
+            boolean latest = false;
+            final JsonObject data = (JsonObject) jsonValue;
+            final int version = data.getInt("jdk_version");
+            final boolean lts = data.getString("term_of_support").equals("lts");
+            final boolean earlyAccess = data.getString("release_status").equals("ea");
+
+            if (!earlyAccess && latestFound.compareAndSet(false, true)) {
+                latest = true;
+                latestVersion.set(new Version(true, lts, version, earlyAccess));
             }
-        }));
+
+            if (lts && latestLtsFound.compareAndSet(false, true)) {
+                latestLtsVersion.set(new Version(true, lts, version, earlyAccess));
+                latest = true;
+            }
+            if (lts) {
+                ltsVersions.add(new Version(latest, lts, version, earlyAccess));
+            } else {
+                availableVersions.add(new Version(latest, lts, version, earlyAccess));
+            }
+        });
         return new Status<>(0, new Versions(
-                new Version(true, false, latest, false),
-                new Version(true, true, latestLts, false),
+                latestVersion.get(),
+                latestLtsVersion.get(),
                 ltsVersions,
                 availableVersions),
                 json::toString);
@@ -164,11 +212,11 @@ class AdoptiumJdkClient extends JdkClient {
             } catch (Exception e) {
                 return CompletableFuture.failedFuture(e);
             }
-            final var uri = downloadUri(version);
+            final var download = downloadUri(version);
             if (command.verbose) {
-                command.print("Downloading from %s", uri);
+                command.print("Downloading from %s", download.uri());
             }
-            final HttpRequest request = HttpRequest.newBuilder(uri)
+            final HttpRequest request = HttpRequest.newBuilder(download.uri())
                     .GET()
                     .build();
             return httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofInputStream())
@@ -176,22 +224,12 @@ class AdoptiumJdkClient extends JdkClient {
                         try {
                             try (InputStream in = response.body()) {
                                 if (response.statusCode() == 200) {
-                                    // Get the content-disposition to get the file name
-                                    final var contentDisposition = response.headers()
-                                            .firstValue("content-disposition")
-                                            .orElseThrow(
-                                                    () -> new RuntimeException(String.format("Failed to find the content disposition in %s", response.headers()
-                                                            .map())));
                                     // Find the file name
-                                    final String filename = getFilename(contentDisposition);
-                                    if (filename == null) {
-                                        command.printError("Could not determine the filename based on the response headers.");
-                                        return 1;
-                                    }
-                                    final Path download = command.distributionDir().resolve(filename);
-                                    if (Files.notExists(download)) {
+                                    final String filename = download.filename();
+                                    final Path downloadedFile = command.distributionDir().resolve(download.filename());
+                                    if (Files.notExists(downloadedFile)) {
                                         if (quiet) {
-                                            Files.copy(in, download, StandardCopyOption.REPLACE_EXISTING);
+                                            Files.copy(in, downloadedFile, StandardCopyOption.REPLACE_EXISTING);
                                         } else {
                                             final long contentLength = response.headers()
                                                     .firstValueAsLong("content-length")
@@ -204,7 +242,7 @@ class AdoptiumJdkClient extends JdkClient {
                                                             .setUnit(SizeUnit.MEGABYTE.abbreviation(), SizeUnit.MEGABYTE.toBytes(1))
                                                             .setStyle(ProgressBarStyle.ASCII)
                                                             .build();
-                                                    OutputStream out = Files.newOutputStream(download)
+                                                    OutputStream out = Files.newOutputStream(downloadedFile)
                                             ) {
                                                 final byte[] buffer = new byte[4096];
                                                 int len;
@@ -213,7 +251,7 @@ class AdoptiumJdkClient extends JdkClient {
                                                     progressBar.stepBy(len);
                                                 }
                                                 if (command.verbose) {
-                                                    command.print("Downloaded %s%n", download);
+                                                    command.print("Downloaded %s%n", downloadedFile);
                                                 }
                                             }
                                         }
@@ -222,27 +260,27 @@ class AdoptiumJdkClient extends JdkClient {
                                     Files.createDirectories(javaHome);
                                     final Path path;
                                     if (filename.endsWith("tar.gz") || filename.endsWith("tgz")) {
-                                        path = Archives.untargz(download, command.distributionDir());
+                                        path = Archives.untargz(downloadedFile, command.distributionDir());
                                         if (path == null) {
-                                            command.printError("Could not extract JDK from %s.", download);
+                                            command.printError("Could not untar the path %s.", downloadedFile);
                                             return 1;
                                         }
                                         Files.move(path, javaHome, StandardCopyOption.REPLACE_EXISTING);
                                     } else {
-                                        Archives.unzip(download, javaHome);
+                                        Archives.unzip(downloadedFile, javaHome);
                                     }
                                     // Delete the download
-                                    Files.deleteIfExists(download);
+                                    Files.deleteIfExists(downloadedFile);
                                 } else {
                                     try (JsonReader reader = Json.createReader(in)) {
-                                        command.printError("Request failed for version %d: %s", version, reader.readObject()
+                                        command.printError("Request failed for version %d: %s", jdkVersion, reader.readObject()
                                                 .getString("errorMessage"));
                                     }
                                     return 1;
                                 }
                             }
                         } catch (IOException e) {
-                            command.printError("Failed to install JDK %s: %s", version, e.getMessage());
+                            command.printError("Failed to install JDK %s: %s", jdkVersion, e.getMessage());
                             return 1;
                         }
                         return 0;
@@ -251,15 +289,37 @@ class AdoptiumJdkClient extends JdkClient {
         return CompletableFuture.completedFuture(0);
     }
 
+    // https://api.foojay.io/disco/v3.0/packages/jdks?distribution=semeru&architecture=x64&archive_type=tar.gz&archive_type=zip&operating_system=linux&release_status=ea&release_status=ga
+    // https://api.foojay.io/disco/v3.0/packages/jdks?distribution=semeru&architecture=x64&archive_type=tar.gz&archive_type=zip&operating_system=linux&release_status=ea&release_status=ga&latest=available
     private Status<JsonObject> getVersionJson() throws IOException, InterruptedException {
         final Cache cacheFile = versionsJson();
         final boolean resolve = cacheFile.requiresDownload();
         final JsonObject json;
         if (resolve) {
-            final var uri = uriBuilder()
-                    .path("info")
-                    .path("available_releases")
-                    .build();
+            final var builder = uriBuilder()
+                    .path("packages/jdks")
+                    .queryParam("distribution", command.distribution)
+                    .queryParam("architecture", arch())
+                    .queryParam("operating_system", os().name())
+                    .queryParam("release_status", "ea")
+                    .queryParam("release_status", "ga")
+                    .queryParam("directly_downloadable", "true")
+                    .queryParam("latest", "available");
+            if (os() == OS.windows) {
+                builder.queryParam("libc_type", "c_std_lib");
+            } else if (os() == OS.mac) {
+                builder.queryParam("libc_type", "libc");
+            } else {
+                builder.queryParam("libc_type", "glibc");
+            }
+            final String archiveType;
+            if (os() == OS.windows) {
+                archiveType = "zip";
+            } else {
+                archiveType = "tar.gz";
+            }
+            builder.queryParam("archive_type", archiveType);
+            final URI uri = builder.build();
             final HttpRequest request = HttpRequest.newBuilder(uri)
                     .GET()
                     .header("accept", "application/json")
@@ -293,19 +353,38 @@ class AdoptiumJdkClient extends JdkClient {
         return new Status<>(0, json, json::toString);
     }
 
-    private URI downloadUri(final Version version) {
-        return uriBuilder()
-                .path("binary")
-                .path("latest")
-                .path(version.version())
-                .path(version.earlyAccess() ? "ea" : "ga")
-                .path(Environment.os())
-                .path(Environment.arch())
-                .path("jdk")
-                .path("hotspot")
-                .path("normal")
-                .path("eclipse")
-                .queryParam("project", "jdk")
-                .build();
+    private Download downloadUri(final Version version) {
+        final JsonObject json;
+        try {
+            json = getVersionJson().body();
+        } catch (IOException | InterruptedException e) {
+            // TODO (jrp) property handle this
+            throw new RuntimeException(e);
+        }
+        // Find the version we're looking for
+        final JsonArray results = json.getJsonArray("result");
+        String directLink = null;
+        String fileName = null;
+        for (JsonValue value : results) {
+            if (value instanceof JsonObject) {
+                final JsonObject result = value.asJsonObject();
+                if (result.getInt("jdk_version") == version.version()) {
+                    if (!result.getBoolean("javafx_bundled")) {
+                        final var links = result.getJsonObject("links");
+                        directLink = links.getString("pkg_download_redirect");
+                        fileName = result.getString("filename");
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (directLink == null) {
+            // TODO (jrp) do something better
+            throw new RuntimeException("Could not find download link for " + version);
+        }
+        return new Download(URI.create(directLink), fileName);
     }
+
+    private record Download(URI uri, String filename){}
 }
