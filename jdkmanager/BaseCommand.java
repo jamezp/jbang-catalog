@@ -19,14 +19,18 @@
 
 package jdkmanager;
 
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.Locale;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Properties;
 import java.util.concurrent.Callable;
-import java.util.concurrent.atomic.AtomicReference;
 
+import jdkmanager.client.Distributions;
+import jdkmanager.client.JdkClient;
+import jdkmanager.util.Environment;
 import picocli.CommandLine;
 
 /**
@@ -34,22 +38,8 @@ import picocli.CommandLine;
  */
 abstract class BaseCommand implements Callable<Integer> {
 
-    enum OS {
-        linux,
-        alpine_linux,
-        mac,
-        windows,
-        aix,
-        unknown;
-    }
-
-    static final Path TMP_DIR = Path.of(System.getProperty("java.io.tmpdir"));
-    static final Path USER_DIR = Path.of(System.getProperty("user.home"));
-    static final Path WORK_DIR = USER_DIR.resolve(".jdk-manager");
-
-    private static final AtomicReference<String> ARCH_REF = new AtomicReference<>();
-
-    private static final AtomicReference<OS> OS_REF = new AtomicReference<>();
+    @CommandLine.Option(names = {"--distribution"}, description = "The name of the distribution to use. Examples: temurin, semeru, zulu", defaultValue = "temurin")
+    String distribution;
 
     @SuppressWarnings("unused")
     @CommandLine.Option(names = {"-h", "--help"}, usageHelp = true, description = "Display this help message")
@@ -64,138 +54,154 @@ abstract class BaseCommand implements Callable<Integer> {
     @CommandLine.Spec
     CommandLine.Model.CommandSpec spec;
 
-    private PrintWriter stdout;
-
-    private PrintWriter stderr;
-    private CommandLine.Help.Ansi ansi;
+    private ConsoleWriter console;
 
     @Override
-    public final Integer call() throws Exception {
-        return call(new JdkClient(this));
+    public final Integer call() {
+        console = new ConsoleWriter(spec.commandLine().getOut(), spec.commandLine()
+                .getErr(), spec.commandLine().getColorScheme().ansi(), verbose);
+        try {
+            try (JdkClient client = JdkClient.of(console, distribution)) {
+                if (refresh) {
+                    client.expireCache();
+                }
+                final Distributions distributions = client.supportedDistributions();
+                if (distributions.isSupported(distribution)) {
+                    return call(client);
+                }
+                printError("Failed to find supported distribution: %s", distribution);
+                return 1;
+            }
+        } catch (Throwable e) {
+            final Throwable cause;
+            if (e.getCause() != null) {
+                cause = e.getCause();
+            } else {
+                cause = e;
+            }
+            printError(cause, "Failed to invoke %s: %s", spec.name(), cause.getMessage());
+            return 1;
+        }
     }
 
     abstract Integer call(JdkClient client) throws Exception;
 
     void print() {
-        final PrintWriter writer = getStdout();
-        writer.println();
+        console.print();
     }
 
     void print(final Object msg) {
-        final PrintWriter writer = getStdout();
-        writer.println(format(String.valueOf(msg)));
+        console.print(msg);
     }
 
     void print(final String fmt, final Object... args) {
-        print(0, fmt, args);
+        console.print(0, fmt, args);
     }
 
     @SuppressWarnings("SameParameterValue")
     void print(final int padding, final Object message) {
-        final PrintWriter writer = getStdout();
-        if (padding > 0) {
-            writer.printf("%1$" + padding + "s", " ");
-        }
-        writer.println(message);
+        console.print(padding, message);
     }
 
     void print(final int padding, final String fmt, final Object... args) {
-        print(getStdout(), padding, fmt, args);
+        console.print(padding, fmt, args);
     }
 
     void printError(final String fmt, final Object... args) {
-        print(getStderr(), 0, "@|red " + fmt + "|@", args);
+        console.printError(fmt, args);
     }
 
-    private void print(final PrintWriter writer, final int padding, final String fmt, final Object... args) {
-        if (padding > 0) {
-            writer.printf("%1$" + padding + "s", " ");
-        }
-        writer.println(format(fmt, args));
+    void printError(final Throwable cause, final String fmt, final Object... args) {
+        console.printError(cause, fmt, args);
     }
 
     PrintWriter getStdout() {
-        if (stdout == null) {
-            stdout = spec.commandLine().getOut();
-        }
-        return stdout;
+        return console.getStdout();
     }
 
-    PrintWriter getStderr() {
-        if (stderr == null) {
-            stderr = spec.commandLine().getErr();
-        }
-        return stderr;
-    }
-
-    String format(final String fmt, final Object... args) {
-        if (ansi == null) {
-            ansi = spec.commandLine().getColorScheme().ansi();
-        }
-        return format(ansi, String.format(fmt, args));
-    }
-
-    String format(final CommandLine.Help.Ansi ansi, final String value) {
-        return ansi.string(value);
-    }
-
-    static boolean isWindows() {
-        return os() == OS.windows;
-    }
-
-    static boolean isNotWindows() {
-        return os() != OS.windows;
-    }
-
-    static String arch() {
-        return ARCH_REF.updateAndGet(arch -> {
-            if (arch == null) {
-                final var archProp = System.getProperty("os.arch")
-                        .toLowerCase(Locale.ROOT)
-                        .replaceAll("[^a-z0-9]+", "");
-                if (archProp.matches("^(x8664|amd64|ia32e|em64t|x64)$")) {
-                    return "x64";
-                } else if (archProp.matches("^(x8632|x86|i[3-6]86|ia32|x32)$")) {
-                    return "x32";
-                } else if (archProp.matches("^(aarch64)$")) {
-                    return "aarch64";
-                } else if (archProp.matches("^(ppc64)$")) {
-                    return "ppc64";
-                } else if (archProp.matches("^(ppc64le)$")) {
-                    return "ppc64le";
-                } else if (archProp.matches("^(s390x)$")) {
-                    return "s390x";
-                } else if (archProp.matches("^(arm64)$")) {
-                    return "arm64";
-                } else {
-                    throw new RuntimeException("Unknown architecture " + archProp);
-                }
-            }
-            return arch;
-        });
-    }
-
-    static OS os() {
-        return OS_REF.updateAndGet(os -> {
-            if (os == null) {
-                final var osName = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-                if (osName.startsWith("mac") || osName.startsWith("osx")) {
-                    return OS.mac;
-                } else if (osName.startsWith("linux")) {
-                    if (Files.exists(Paths.get("/etc/alpine-release"))) {
-                        return OS.alpine_linux;
-                    } else {
-                        return OS.linux;
+    Properties javaInfo(final Path javaHome) throws IOException, InterruptedException {
+        final String[] commands = {
+                javaHome.resolve("bin").resolve("java").toString(),
+                "-XshowSettings:properties",
+                "-version"
+        };
+        final Path tempFile = Environment.resolveTempFile(distribution, javaHome.getFileName()
+                .toString(), "jdk-info.out");
+        try {
+            final Process process = new ProcessBuilder(commands)
+                    .redirectErrorStream(true)
+                    .redirectOutput(ProcessBuilder.Redirect.to(tempFile.toFile()))
+                    .start();
+            final int exitCode = process.waitFor();
+            final Properties properties = new Properties();
+            final List<String> lines = Files.readAllLines(tempFile);
+            if (exitCode == 0) {
+                // Read each line looking for "Property settings:"
+                boolean inProperties = false;
+                for (var line : lines) {
+                    if (line.trim().startsWith("Property settings:")) {
+                        inProperties = true;
+                        continue;
                     }
-                } else if (osName.startsWith("win")) {
-                    return OS.windows;
-                } else if (osName.startsWith("aix")) {
-                    return OS.aix;
-                } else {
-                    return OS.unknown;
+                    if (inProperties) {
+                        final var trimmed = line.trim();
+                        final int i = trimmed.indexOf('=');
+                        if (i > 0) {
+                            final var key = trimmed.substring(0, i).trim();
+                            if (KnownProperties.PROPERTIES.contains(key)) {
+                                final var value = trimmed.substring(i + 1).trim();
+                                properties.setProperty(key, value);
+                            }
+                        }
+                    }
                 }
             }
-            return os;
-        });
+            return properties;
+        } finally {
+            Files.deleteIfExists(tempFile);
+        }
+    }
+
+    static class KnownProperties implements Iterable<String> {
+        static final List<String> PROPERTIES = List.of(
+                "java.version",
+                "java.version.date",
+                "java.vendor",
+                "java.vendor.url",
+                "java.vendor.version",
+                "java.home",
+                "java.vm.specification.version",
+                "java.vm.specification.vendor",
+                "java.vm.specification.name",
+                "java.vm.version",
+                "java.vm.vendor",
+                "java.vm.name",
+                "java.specification.version",
+                "java.specification.vendor",
+                "java.specification.name",
+                "java.class.version",
+                // Keeping this as it's a standard property, but doesn't do us much good here
+                // "java.class.path",
+                //"java.library.path",
+                "java.io.tmpdir",
+                "os.name",
+                "os.arch",
+                "os.version",
+                "file.separator",
+                "path.separator",
+                "line.separator",
+                "user.name",
+                "user.home",
+                "user.dir"
+        );
+
+        @Override
+        public Iterator<String> iterator() {
+            return PROPERTIES.iterator();
+        }
+
+        static boolean missing(final String property) {
+            return property != null && !PROPERTIES.contains(property);
+        }
     }
 }

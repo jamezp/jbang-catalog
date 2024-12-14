@@ -1,19 +1,20 @@
-///usr/bin/env jbang "$0" "$@" ; exit $?
+/// usr/bin/env jbang "$0" "$@" ; exit $?
 //JAVA 17+
 //DEPS info.picocli:picocli:4.7.3
 //DEPS jakarta.json:jakarta.json-api:2.1.2
 //DEPS org.eclipse.parsson:parsson:1.1.4
 //DEPS org.apache.commons:commons-compress:1.24.0
 //DEPS me.tongfei:progressbar:0.10.0
-//SOURCES BaseCommand.java,Install.java,JdkList.java,Info.java,JdkClient.java
+//SOURCES *.java,client/*.java,util/*.java
 
 package jdkmanager;
 
-import java.nio.file.Files;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
 
+import jdkmanager.util.Environment;
 import picocli.AutoComplete;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
@@ -24,31 +25,59 @@ import picocli.CommandLine.Command;
 @Command(name = "jdk-manager", description = "Manages local JDK installations.",
         showDefaultValues = true, subcommands = {
         AutoComplete.GenerateCompletion.class,
-        Install.class,
-        JdkList.class,
-        Info.class
+        InstallCommand.class,
+        ListCommand.class,
+        InfoCommand.class,
+        DistributionCommand.class
 }
 )
-public class jdkmanager extends BaseCommand implements Callable<Integer> {
+public class jdkmanager implements Callable<Integer> {
+
+    @CommandLine.Option(names = {"--clear-cache"}, description = "Clears the local cache")
+    private boolean clearCache;
+
+    @CommandLine.Spec
+    private CommandLine.Model.CommandSpec spec;
 
     public jdkmanager() {
     }
 
     public static void main(String... args) throws Exception {
+        // Load the environment and check for any issues
+        final boolean verbose = args != null && (List.of(args).contains("--verbose") || List.of(args).contains("-v"));
+        try {
+            final var workDir = Environment.WORK_DIR;
+            if (verbose) {
+                System.out.printf("Working Directory: %s%n", workDir);
+            }
+        } catch (Throwable t) {
+            final Throwable cause;
+            if (t.getCause() != null) {
+                cause = t.getCause();
+            } else {
+                cause = t;
+            }
+            System.err.printf("Failed to initialize environment: %s%n", cause.getMessage());
+            if (verbose) {
+                cause.printStackTrace(System.err);
+            }
+            System.exit(1);
+        }
         final CommandLine commandLine = new CommandLine(new jdkmanager());
         commandLine.setCaseInsensitiveEnumValuesAllowed(true);
         disableGenerateCompletion(commandLine.getSubcommands().entrySet());
-        if (Files.notExists(WORK_DIR)) {
-            Files.createDirectories(WORK_DIR);
-        }
         final int exitStatus = commandLine.execute(args);
         System.exit(exitStatus);
     }
 
     @Override
-    Integer call(final JdkClient client) {
+    public Integer call() throws Exception {
+        if (clearCache) {
+            Environment.deleteCache();
+            return 0;
+        }
         // Display the usage if there was no sub-command sent
-        spec.commandLine().usage(getStdout());
+        spec.commandLine().usage(spec.commandLine().getOut());
         return 0;
     }
 
