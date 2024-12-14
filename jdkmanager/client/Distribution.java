@@ -17,18 +17,19 @@
  * limitations under the License.
  */
 
-package jdkmanager;
+package jdkmanager.client;
+
+import java.util.Set;
 
 /**
+ * Represents a supported distribution of a JDK.
+ *
  * @author <a href="mailto:jperkins@redhat.com">James R. Perkins</a>
  */
-record Version(boolean latest, boolean lts, int version, boolean earlyAccess) implements Comparable<Version> {
-    public Version() {
-        this(false, false, -1, false);
-    }
+public record Distribution(String name, Set<String> synonyms) implements Comparable<Distribution> {
 
     @Override
-    public int compareTo(final Version o) {
-        return Integer.compare(version, o.version);
+    public int compareTo(final Distribution o) {
+        return name.compareTo(o.name);
     }
 }

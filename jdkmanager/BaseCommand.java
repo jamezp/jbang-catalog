@@ -23,9 +23,14 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.attribute.PosixFilePermissions;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Properties;
 import java.util.concurrent.Callable;
 
+import jdkmanager.client.Distributions;
+import jdkmanager.client.JdkClient;
+import jdkmanager.util.Environment;
 import picocli.CommandLine;
 
 /**
@@ -33,7 +38,7 @@ import picocli.CommandLine;
  */
 abstract class BaseCommand implements Callable<Integer> {
 
-    @CommandLine.Option(names = {"--distribution"}, description = "The name of the distribution to use. Examples: temurin, semeru, zulu")
+    @CommandLine.Option(names = {"--distribution"}, description = "The name of the distribution to use. Examples: temurin, semeru, zulu", defaultValue = "temurin")
     String distribution;
 
     @SuppressWarnings("unused")
@@ -49,29 +54,17 @@ abstract class BaseCommand implements Callable<Integer> {
     @CommandLine.Spec
     CommandLine.Model.CommandSpec spec;
 
-    boolean distributionSet = false;
-
-    private PrintWriter stdout;
-
-    private PrintWriter stderr;
-    private CommandLine.Help.Ansi ansi;
+    private ConsoleWriter console;
 
     @Override
-    public final Integer call() throws Exception {
+    public final Integer call() {
+        console = new ConsoleWriter(spec.commandLine().getOut(), spec.commandLine()
+                .getErr(), spec.commandLine().getColorScheme().ansi(), verbose);
         try {
-            // TODO (jrp) we need to do something with distribution here. We need to use https://api.foojay.io/disco/v3.0/distributions?include_versions=false&include_synonyms=true
-            // TODO (jrp) to download a valid list of distributions
-            if (distribution == null) {
-                distribution = "temurin";
-                try (JdkClient client = new AdoptiumJdkClient(this)) {
-                    return call(client);
+            try (JdkClient client = JdkClient.of(console, distribution)) {
+                if (refresh) {
+                    client.expireCache();
                 }
-            }
-            if (refresh) {
-                Environment.deleteCache();
-            }
-            distributionSet = true;
-            try (JdkClient client = new FoojayJdkClient(this)) {
                 final Distributions distributions = client.supportedDistributions();
                 if (distributions.isSupported(distribution)) {
                     return call(client);
@@ -93,86 +86,122 @@ abstract class BaseCommand implements Callable<Integer> {
 
     abstract Integer call(JdkClient client) throws Exception;
 
-    Path distributionDir() throws IOException {
-        final Path dir = Environment.WORK_DIR.resolve(distribution);
-        if (Files.notExists(dir)) {
-            if (Environment.supportsPosix()) {
-                Files.createDirectories(dir, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
-            } else {
-                Files.createDirectories(dir);
-            }
-        }
-        return dir;
-    }
-
     void print() {
-        final PrintWriter writer = getStdout();
-        writer.println();
+        console.print();
     }
 
     void print(final Object msg) {
-        final PrintWriter writer = getStdout();
-        writer.println(format(String.valueOf(msg)));
+        console.print(msg);
     }
 
     void print(final String fmt, final Object... args) {
-        print(0, fmt, args);
+        console.print(0, fmt, args);
     }
 
     @SuppressWarnings("SameParameterValue")
     void print(final int padding, final Object message) {
-        final PrintWriter writer = getStdout();
-        if (padding > 0) {
-            writer.printf("%1$" + padding + "s", " ");
-        }
-        writer.println(message);
+        console.print(padding, message);
     }
 
     void print(final int padding, final String fmt, final Object... args) {
-        print(getStdout(), padding, fmt, args);
+        console.print(padding, fmt, args);
     }
 
     void printError(final String fmt, final Object... args) {
-        print(getStderr(), 0, "@|red " + fmt + "|@", args);
+        console.printError(fmt, args);
     }
 
     void printError(final Throwable cause, final String fmt, final Object... args) {
-        print(getStderr(), 0, "@|red " + fmt + "|@", args);
-        if (verbose) {
-            cause.printStackTrace(getStderr());
-        }
-    }
-
-    private void print(final PrintWriter writer, final int padding, final String fmt, final Object... args) {
-        if (padding > 0) {
-            writer.printf("%1$" + padding + "s", " ");
-        }
-        writer.println(format(fmt, args));
+        console.printError(cause, fmt, args);
     }
 
     PrintWriter getStdout() {
-        if (stdout == null) {
-            stdout = spec.commandLine().getOut();
+        return console.getStdout();
+    }
+
+    Properties javaInfo(final Path javaHome) throws IOException, InterruptedException {
+        final String[] commands = {
+                javaHome.resolve("bin").resolve("java").toString(),
+                "-XshowSettings:properties",
+                "-version"
+        };
+        final Path tempFile = Environment.resolveTempFile(distribution, javaHome.getFileName()
+                .toString(), "jdk-info.out");
+        try {
+            final Process process = new ProcessBuilder(commands)
+                    .redirectErrorStream(true)
+                    .redirectOutput(ProcessBuilder.Redirect.to(tempFile.toFile()))
+                    .start();
+            final int exitCode = process.waitFor();
+            final Properties properties = new Properties();
+            final List<String> lines = Files.readAllLines(tempFile);
+            if (exitCode == 0) {
+                // Read each line looking for "Property settings:"
+                boolean inProperties = false;
+                for (var line : lines) {
+                    if (line.trim().startsWith("Property settings:")) {
+                        inProperties = true;
+                        continue;
+                    }
+                    if (inProperties) {
+                        final var trimmed = line.trim();
+                        final int i = trimmed.indexOf('=');
+                        if (i > 0) {
+                            final var key = trimmed.substring(0, i).trim();
+                            if (KnownProperties.PROPERTIES.contains(key)) {
+                                final var value = trimmed.substring(i + 1).trim();
+                                properties.setProperty(key, value);
+                            }
+                        }
+                    }
+                }
+            }
+            return properties;
+        } finally {
+            Files.deleteIfExists(tempFile);
         }
-        return stdout;
     }
 
-    PrintWriter getStderr() {
-        if (stderr == null) {
-            stderr = spec.commandLine().getErr();
+    static class KnownProperties implements Iterable<String> {
+        static final List<String> PROPERTIES = List.of(
+                "java.version",
+                "java.version.date",
+                "java.vendor",
+                "java.vendor.url",
+                "java.vendor.version",
+                "java.home",
+                "java.vm.specification.version",
+                "java.vm.specification.vendor",
+                "java.vm.specification.name",
+                "java.vm.version",
+                "java.vm.vendor",
+                "java.vm.name",
+                "java.specification.version",
+                "java.specification.vendor",
+                "java.specification.name",
+                "java.class.version",
+                // Keeping this as it's a standard property, but doesn't do us much good here
+                // "java.class.path",
+                //"java.library.path",
+                "java.io.tmpdir",
+                "os.name",
+                "os.arch",
+                "os.version",
+                "file.separator",
+                "path.separator",
+                "line.separator",
+                "user.name",
+                "user.home",
+                "user.dir"
+        );
+
+        @Override
+        public Iterator<String> iterator() {
+            return PROPERTIES.iterator();
         }
-        return stderr;
-    }
 
-    String format(final String fmt, final Object... args) {
-        if (ansi == null) {
-            ansi = spec.commandLine().getColorScheme().ansi();
+        static boolean missing(final String property) {
+            return property != null && !PROPERTIES.contains(property);
         }
-        return format(ansi, String.format(fmt, args));
     }
-
-    String format(final CommandLine.Help.Ansi ansi, final String value) {
-        return ansi.string(value);
-    }
-
 }

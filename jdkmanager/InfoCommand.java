@@ -28,6 +28,8 @@ import java.util.function.BiConsumer;
 
 import jakarta.json.Json;
 import jakarta.json.stream.JsonGenerator;
+import jdkmanager.client.JdkClient;
+import jdkmanager.util.Environment;
 import picocli.AutoComplete;
 import picocli.CommandLine;
 import picocli.CommandLine.Option;
@@ -38,7 +40,7 @@ import picocli.CommandLine.Parameters;
  */
 @CommandLine.Command(name = "info", description = "Prints information about the current JVM.",
         subcommands = AutoComplete.GenerateCompletion.class)
-class Info extends BaseCommand {
+class InfoCommand extends BaseCommand {
 
     enum OutputFormat {
         json,
@@ -51,7 +53,7 @@ class Info extends BaseCommand {
     @Option(names = {"-f", "--format"}, description = "The output format of the results.")
     private OutputFormat outputFormat;
 
-    @Option(names = {"-p", "--property"}, description = "The property to print. Note that the format parameter has no affect on the output with this argument.", completionCandidates = JdkClient.KnownProperties.class)
+    @Option(names = {"-p", "--property"}, description = "The property to print. Note that the format parameter has no affect on the output with this argument.", completionCandidates = KnownProperties.class)
     private String property;
 
     @Parameters(arity = "0..1", description = "The version you'd like to get the properties for.")
@@ -59,16 +61,16 @@ class Info extends BaseCommand {
 
     @Override
     Integer call(final JdkClient client) throws Exception {
-        if (JdkClient.KnownProperties.missing(property)) {
+        if (BaseCommand.KnownProperties.missing(property)) {
             final StringBuilder properties = new StringBuilder();
-            JdkClient.KnownProperties.PROPERTIES.forEach((name) -> properties.append(System.lineSeparator())
+            BaseCommand.KnownProperties.PROPERTIES.forEach((name) -> properties.append(System.lineSeparator())
                     .append(name));
             printError("Property \"%s\" is is not a valid property. Valid properties are: %s", property, properties);
             return 1;
         }
         if (version > 0) {
-            final Path javaHome = distributionDir().resolve("jdk-" + version);
-            if (Files.notExists(javaHome)) {
+            final Path javaHome = Environment.resolveJavaHome(distribution, version);
+            if (Files.notExists(javaHome) || Environment.isEmpty(javaHome)) {
                 if (downloadIfMissing) {
                     // TODO (jrp) we need to determine this somehow
                     final int exitCode = client.download(javaHome, version, !verbose)
@@ -81,15 +83,7 @@ class Info extends BaseCommand {
                     return 1;
                 }
             }
-            final var status = client.getJavaInfo(javaHome);
-            if (status.exitStatus() > 0) {
-                printError("Failed to get info for Java %s.", version);
-                if (verbose) {
-                    printError("Error: %s", status.rawData().get());
-                }
-                return status.exitStatus();
-            }
-            final var properties = status.body();
+            final var properties = javaInfo(javaHome);
             if (property == null) {
                 printInfo(properties);
             } else {
@@ -140,7 +134,7 @@ class Info extends BaseCommand {
                 print("@|bold,green %-30s:|@ %s", name, value);
             };
         }
-        for (var name : JdkClient.KnownProperties.PROPERTIES) {
+        for (var name : KnownProperties.PROPERTIES) {
             lineWriter.accept(name, properties.getProperty(name));
         }
         completer.run();

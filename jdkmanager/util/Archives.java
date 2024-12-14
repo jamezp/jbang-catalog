@@ -17,7 +17,7 @@
  * limitations under the License.
  */
 
-package jdkmanager;
+package jdkmanager.util;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -37,9 +37,11 @@ import org.apache.commons.compress.archivers.zip.ZipFile;
 import org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream;
 
 /**
+ * A utility for handling archives.
+ *
  * @author <a href="mailto:jperkins@redhat.com">James R. Perkins</a>
  */
-class Archives {
+public class Archives {
     private static final int OWNER_READ_FILEMODE = 0b100_000_000; // 0400
     private static final int OWNER_WRITE_FILEMODE = 0b010_000_000; // 0200
     private static final int OWNER_EXEC_FILEMODE = 0b001_000_000; // 0100
@@ -52,7 +54,17 @@ class Archives {
     private static final int OTHERS_WRITE_FILEMODE = 0b000_000_010; // 0002
     private static final int OTHERS_EXEC_FILEMODE = 0b000_000_001; // 0001
 
-    static Path untargz(final Path archiveFile, final Path targetDir) throws IOException {
+    /**
+     * Decompresses the tar file and returns the directory it was decompressed to.
+     *
+     * @param archiveFile the file to decompress
+     * @param targetDir   the directory where the temporary file should be stored
+     *
+     * @return the directory where the file was decompressed to
+     *
+     * @throws IOException if an error occurs decompressing the file
+     */
+    public static Path untargz(final Path archiveFile, final Path targetDir) throws IOException {
         Path firstDir = null;
 
         try (TarArchiveInputStream in = new TarArchiveInputStream(new GzipCompressorInputStream(Files.newInputStream(archiveFile)))) {
@@ -78,7 +90,15 @@ class Archives {
         }
     }
 
-    static void unzip(final Path zip, final Path targetDir) throws IOException {
+    /**
+     * Decompresses a zip file.
+     *
+     * @param zip       the archive file
+     * @param targetDir the directory where the archive should be extracted to
+     *
+     * @throws IOException if an error occurs decompressing the file
+     */
+    public static void unzip(final Path zip, final Path targetDir) throws IOException {
         try (ZipFile zipFile = new ZipFile(zip.toFile())) {
             final Enumeration<ZipArchiveEntry> entries = zipFile.getEntries();
             while (entries.hasMoreElements()) {

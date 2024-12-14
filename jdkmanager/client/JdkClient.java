@@ -1,7 +1,7 @@
 /*
  * JBoss, Home of Professional Open Source.
  *
- * Copyright 2023 Red Hat, Inc., and individual contributors
+ * Copyright 2024 Red Hat, Inc., and individual contributors
  * as indicated by the @author tags.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,105 +17,115 @@
  * limitations under the License.
  */
 
-package jdkmanager;
+package jdkmanager.client;
 
 import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.function.Supplier;
 import java.util.stream.Stream;
 
+import jdkmanager.ConsoleWriter;
+import jdkmanager.util.Environment;
+
 /**
+ * A simple client downloading information about available JDK's.
+ *
  * @author <a href="mailto:jperkins@redhat.com">James R. Perkins</a>
  */
-abstract class JdkClient implements AutoCloseable {
-    protected final BaseCommand command;
+public abstract class JdkClient implements AutoCloseable {
     private final String baseUri;
+    protected final ConsoleWriter consoleWriter;
+    protected final String distribution;
     protected final HttpClient httpClient;
 
-    JdkClient(final BaseCommand command, final String baseUri) {
-        this.command = command;
+    JdkClient(final ConsoleWriter consoleWriter, final String distribution, final String baseUri) {
+        this.consoleWriter = consoleWriter;
+        this.distribution = distribution;
         this.baseUri = baseUri;
         httpClient = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.ALWAYS).build();
     }
 
-    // TODO (jrp) this needs to be implemented here and come from the foojay API
-    abstract Distributions supportedDistributions() throws IOException, InterruptedException;
+    /**
+     * Creates a new client.
+     *
+     * @param consoleWriter the console writer for logging output
+     * @param distribution  the distribution the client should be associated with
+     *
+     * @return a new client
+     */
+    public static JdkClient of(final ConsoleWriter consoleWriter, final String distribution) {
+        return new FoojayJdkClient(consoleWriter, distribution);
+    }
 
-    int latestLts() throws IOException, InterruptedException {
+    /**
+     * Returns the supported distributions for the client.
+     *
+     * @return the supported distributions
+     */
+    public abstract Distributions supportedDistributions();
+
+    public void expireCache() throws IOException {
+        versionsJson().expire();
+    }
+
+    /**
+     * That latest LTS version available for the distribution.
+     *
+     * @return the latest LTS version
+     */
+    public int latestLts() {
         final var versions = getVersions();
-        return versions.body().latestLts().version();
+        return versions.latestLts().version();
     }
 
-    // TODO (jrp) should this really be he default?
-    Version version(int majorVersion) throws IOException, InterruptedException {
-        final Status<Versions> versionStatus = getVersions();
-        if (versionStatus.exitStatus() == 0) {
-            final Versions versions = versionStatus.body();
-            return Stream.concat(versions.lts().stream(), versions.available().stream())
-                    .filter(v -> v.version() == majorVersion)
-                    .findFirst()
-                    .orElseThrow(() -> new RuntimeException("Version " + majorVersion + " not found"));
-        }
-        throw new RuntimeException(String.format("Could not find version %d: %s", majorVersion, versionStatus.rawData()
-                .get()));
-    }
+    /**
+     * Returns the available versions for the distribution.
+     *
+     * @return the available version
+     */
+    public abstract Versions getVersions();
 
-    abstract Status<Versions> getVersions() throws IOException, InterruptedException;
-
-    abstract Status<Properties> getJavaInfo(Path javaHome) throws IOException, InterruptedException;
-
-    abstract CompletionStage<Integer> download(Path javaHome, int jdkVersion, boolean quiet);
-
-    UriBuilder uriBuilder() {
-        return new UriBuilder(baseUri);
-    }
-
-    Cache versionsJson() throws IOException {
-        return Environment.resolveCacheFile(String.format("%s-versions.json", command.distribution));
-    }
+    /**
+     * Downloads the JDK and extracts to the download to the {@code javaHome} directory.
+     *
+     * @param javaHome   the directory to download and extract the JDK to
+     * @param jdkVersion the JDK version
+     * @param quiet      if the progress should be shown
+     *
+     * @return an async stage which returns the exit code for the download
+     */
+    public abstract CompletionStage<Integer> download(Path javaHome, int jdkVersion, boolean quiet);
 
     @Override
     public void close() {
         //httpClient.close();
     }
 
-    static String getFilename(final String contentDisposition) {
-        final String filename;
-        final var key = "filename=";
-        int start = contentDisposition.indexOf(key);
-        if (start >= 0) {
-            start = start + key.length();
-            final int end = contentDisposition.lastIndexOf(';');
-            if (end > start) {
-                filename = contentDisposition.substring(start, end);
-            } else {
-                filename = contentDisposition.substring(start);
-            }
-        } else {
-            return null;
-        }
-        return filename;
+    Version findVersion(final int majorVersion) {
+        final Versions versions = getVersions();
+        return Stream.concat(versions.lts().stream(), versions.available().stream())
+                .filter(v -> v.version() == majorVersion)
+                .findFirst()
+                .orElseThrow(() -> new RuntimeException("Version " + majorVersion + " not found"));
     }
 
-    record Status<T>(int exitStatus, T body, Supplier<String> rawData) {
-        public Status(final int exitStatus, final T body, final String rawData) {
-            this(exitStatus, body, () -> rawData);
-        }
+    UriBuilder uriBuilder() {
+        return new UriBuilder(baseUri);
+    }
+
+    CacheFile versionsJson() throws IOException {
+        return Environment.resolveCacheFile(String.format("%s-versions.json", distribution));
     }
 
     @SuppressWarnings("SameParameterValue")
@@ -273,46 +283,4 @@ abstract class JdkClient implements AutoCloseable {
         }
     }
 
-    static class KnownProperties implements Iterable<String> {
-        static final List<String> PROPERTIES = List.of(
-                "java.version",
-                "java.version.date",
-                "java.vendor",
-                "java.vendor.url",
-                "java.vendor.version",
-                "java.home",
-                "java.vm.specification.version",
-                "java.vm.specification.vendor",
-                "java.vm.specification.name",
-                "java.vm.version",
-                "java.vm.vendor",
-                "java.vm.name",
-                "java.specification.version",
-                "java.specification.vendor",
-                "java.specification.name",
-                "java.class.version",
-                // Keeping this as it's a standard property, but doesn't do us much good here
-                // "java.class.path",
-                //"java.library.path",
-                "java.io.tmpdir",
-                "os.name",
-                "os.arch",
-                "os.version",
-                "file.separator",
-                "path.separator",
-                "line.separator",
-                "user.name",
-                "user.home",
-                "user.dir"
-        );
-
-        @Override
-        public Iterator<String> iterator() {
-            return PROPERTIES.iterator();
-        }
-
-        static boolean missing(final String property) {
-            return property != null && !PROPERTIES.contains(property);
-        }
-    }
 }

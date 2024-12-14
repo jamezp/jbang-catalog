@@ -5,7 +5,7 @@
 //DEPS org.eclipse.parsson:parsson:1.1.4
 //DEPS org.apache.commons:commons-compress:1.24.0
 //DEPS me.tongfei:progressbar:0.10.0
-//SOURCES *.java
+//SOURCES *.java,client/*.java,util/*.java
 
 package jdkmanager;
 
@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
 
+import jdkmanager.util.Environment;
 import picocli.AutoComplete;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
@@ -24,12 +25,18 @@ import picocli.CommandLine.Command;
 @Command(name = "jdk-manager", description = "Manages local JDK installations.",
         showDefaultValues = true, subcommands = {
         AutoComplete.GenerateCompletion.class,
-        Install.class,
-        JdkList.class,
-        Info.class
+        InstallCommand.class,
+        ListCommand.class,
+        InfoCommand.class
 }
 )
-public class jdkmanager extends BaseCommand implements Callable<Integer> {
+public class jdkmanager implements Callable<Integer> {
+
+    @CommandLine.Option(names = {"--clear-cache"}, description = "Clears the local cache")
+    private boolean clearCache;
+
+    @CommandLine.Spec
+    private CommandLine.Model.CommandSpec spec;
 
     public jdkmanager() {
     }
@@ -63,9 +70,13 @@ public class jdkmanager extends BaseCommand implements Callable<Integer> {
     }
 
     @Override
-    Integer call(final JdkClient client) {
+    public Integer call() throws Exception {
+        if (clearCache) {
+            Environment.deleteCache();
+            return 0;
+        }
         // Display the usage if there was no sub-command sent
-        spec.commandLine().usage(getStdout());
+        spec.commandLine().usage(spec.commandLine().getOut());
         return 0;
     }
 

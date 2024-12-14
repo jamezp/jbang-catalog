@@ -17,38 +17,39 @@
  * limitations under the License.
  */
 
-package jdkmanager;
+package jdkmanager.client;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.time.LocalDate;
-import java.time.ZoneId;
+import java.util.Iterator;
+import java.util.Set;
 
 /**
+ * Represents a collection of {@linkplain Distribution distributions}.
+ *
  * @author <a href="mailto:jperkins@redhat.com">James R. Perkins</a>
  */
-public record Cache(Path file) {
+public record Distributions(Set<Distribution> distributions) implements Iterable<Distribution> {
 
-    // TODO (jrp) do we even need this?
-    boolean isExpired() {
-        try {
-            if (Files.exists(file)) {
-                final var lastModified = Files.getLastModifiedTime(file).toInstant();
-                final var lastModDate = LocalDate.ofInstant(lastModified, ZoneId.systemDefault());
-                if (lastModDate.isBefore(LocalDate.now())) {
-                    return true;
-                }
-            } else {
+    /**
+     * Checks if the passed in string is a support distribution.
+     *
+     * @param name the distribution name or synonym
+     *
+     * @return {@code true} if the name is a supported distribution
+     */
+    public boolean isSupported(final String name) {
+        for (Distribution distribution : this) {
+            if (distribution.name().equals(name)) {
                 return true;
             }
-        } catch (IOException e) {
-
+            if (distribution.synonyms().contains(name)) {
+                return true;
+            }
         }
         return false;
     }
 
-    boolean requiresDownload() {
-        return Files.notExists(file) || isExpired();
+    @Override
+    public Iterator<Distribution> iterator() {
+        return distributions.iterator();
     }
 }

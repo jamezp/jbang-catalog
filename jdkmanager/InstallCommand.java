@@ -21,6 +21,8 @@ package jdkmanager;
 
 import java.nio.file.Path;
 
+import jdkmanager.client.JdkClient;
+import jdkmanager.util.Environment;
 import picocli.AutoComplete;
 import picocli.CommandLine;
 
@@ -29,7 +31,7 @@ import picocli.CommandLine;
  */
 @CommandLine.Command(name = "install", description = "Installs a JDK locally.",
         subcommands = AutoComplete.GenerateCompletion.class)
-public class Install extends BaseCommand {
+public class InstallCommand extends BaseCommand {
 
     // TODO (jrp) add an option to look for JavaFX included
     @CommandLine.Parameters(arity = "0..1", description = "The version you'd like to install if missing and resolve the path to set for the JAVA_HOME environment variable.")
@@ -39,11 +41,13 @@ public class Install extends BaseCommand {
     Integer call(final JdkClient client) throws Exception {
         final int version = this.version > 0 ? this.version : client.latestLts();
         if (version > 0) {
-            final Path javaHome = distributionDir().resolve("jdk-" + version);
-            client.download(javaHome, version, false)
-                    .thenRun(() -> {
-                        print(javaHome);
-                    }).toCompletableFuture().get();
+            final Path javaHome = Environment.resolveJavaHome(distribution, version);
+            if (refresh || Environment.isEmpty(javaHome)) {
+                client.download(javaHome, version, false)
+                        .thenRun(() -> print(javaHome)).toCompletableFuture().get();
+            } else {
+                print("Java %d is already installed at %s", version, javaHome);
+            }
         }
         return 0;
     }

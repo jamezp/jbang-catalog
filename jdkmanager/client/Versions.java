@@ -17,16 +17,15 @@
  * limitations under the License.
  */
 
-package jdkmanager;
+package jdkmanager.client;
 
 import java.util.Set;
 
 /**
+ * Represents a collection of JDK versions.
+ *
  * @author <a href="mailto:jperkins@redhat.com">James R. Perkins</a>
  */
-record Versions(Version latestLts, Version latest,
-                Set<Version> lts, Set<Version> available) {
-    public Versions() {
-        this(new Version(), new Version(), Set.of(), Set.of());
-    }
+public record Versions(Version latestLts, Version latest,
+                       Set<Version> lts, Set<Version> available) {
 }
