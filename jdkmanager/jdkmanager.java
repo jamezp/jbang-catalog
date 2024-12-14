@@ -27,7 +27,8 @@ import picocli.CommandLine.Command;
         AutoComplete.GenerateCompletion.class,
         InstallCommand.class,
         ListCommand.class,
-        InfoCommand.class
+        InfoCommand.class,
+        DistributionCommand.class
 }
 )
 public class jdkmanager implements Callable<Integer> {
