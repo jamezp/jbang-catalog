@@ -304,6 +304,9 @@ class FoojayJdkClient extends JdkClient {
         for (JsonValue value : results) {
             if (value instanceof JsonObject) {
                 final JsonObject result = value.asJsonObject();
+                if (version.earlyAccess() != "ea".equals(result.getString("release_status"))) {
+                    continue;
+                }
                 if (result.getInt("jdk_version") == version.version()) {
                     if (!result.getBoolean("javafx_bundled")) {
                         final var links = result.getJsonObject("links");
