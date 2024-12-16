@@ -205,7 +205,7 @@ class FoojayJdkClient extends JdkClient {
                                 Files.createDirectories(javaHome);
                                 final Path path;
                                 if (filename.endsWith("tar.gz") || filename.endsWith("tgz")) {
-                                    final Path targetDir = Environment.resolveTempFile(distribution, "jdk-" + version.version());
+                                    final Path targetDir = Environment.createTempDirectory(distribution, "jdk-" + version.version());
                                     path = Archives.untargz(downloadedFile, targetDir);
                                     if (path == null) {
                                         consoleWriter.printError("Could not untar the path %s.", downloadedFile);

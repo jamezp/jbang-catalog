@@ -168,8 +168,12 @@ public class Environment {
      *
      * @return the path to the temporary directory
      */
-    public static Path resolveTempFile(final String path) {
-        return TMP_DIR.resolve(path);
+    public static Path createTempDirectory(final String path) {
+        final var result = TMP_DIR.resolve(path);
+        if (Files.notExists(result)) {
+            createDirectory(result);
+        }
+        return result;
     }
 
     /**
@@ -179,10 +183,62 @@ public class Environment {
      *
      * @return the path to the temporary directory
      */
+    public static Path createTempDirectory(final String... paths) {
+        Path result = TMP_DIR;
+        for (String path : paths) {
+            result = result.resolve(path);
+        }
+        if (Files.notExists(result.getParent())) {
+            createDirectory(result.getParent());
+        }
+        return result;
+    }
+
+    /**
+     * Resolves a path to the temporary directory and creates the file.
+     *
+     * @param paths the paths to resolve
+     *
+     * @return the path to the temporary file
+     */
+    public static Path createTempFile(final String... paths) {
+        Path result = TMP_DIR;
+        for (String path : paths) {
+            result = result.resolve(path);
+        }
+        final var parent = result.getParent();
+        if (parent != null && Files.notExists(parent)) {
+            createDirectory(parent);
+        }
+        if (Files.notExists(result)) {
+            try {
+                if (SUPPORTS_POSIX) {
+                    Files.createFile(result, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
+                } else {
+                    Files.createFile(result);
+                }
+            } catch (IOException e) {
+                throw new UncheckedIOException("Failed to create temp file", e);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Resolves a path to the temporary directory and creates the file.
+     *
+     * @param paths the paths to resolve
+     *
+     * @return the path to the temporary file
+     */
     public static Path resolveTempFile(final String... paths) {
         Path result = TMP_DIR;
         for (String path : paths) {
             result = result.resolve(path);
+        }
+        final var parent = result.getParent();
+        if (parent != null && Files.notExists(parent)) {
+            createDirectory(parent);
         }
         return result;
     }

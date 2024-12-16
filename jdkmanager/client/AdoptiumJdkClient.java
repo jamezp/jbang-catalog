@@ -168,7 +168,7 @@ class AdoptiumJdkClient extends JdkClient {
                                 Files.createDirectories(javaHome);
                                 final Path path;
                                 if (filename.endsWith("tar.gz") || filename.endsWith("tgz")) {
-                                    final Path targetDir = Environment.resolveTempFile(distribution, "jdk-" + version.version());
+                                    final Path targetDir = Environment.createTempDirectory(distribution, "jdk-" + version.version());
                                     path = Archives.untargz(download, targetDir);
                                     if (path == null) {
                                         consoleWriter.printError("Could not extract JDK from %s.", download);
