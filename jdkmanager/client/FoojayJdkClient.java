@@ -35,7 +35,6 @@ import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 import jakarta.json.Json;
@@ -120,14 +119,11 @@ class FoojayJdkClient extends JdkClient {
         try {
             final JsonObject json = getVersionJson();
 
-            final Set<Version> ltsVersions = new TreeSet<>();
             final Set<Version> availableVersions = new TreeSet<>();
 
             final JsonArray results = json.getJsonArray("result");
             final AtomicBoolean latestLtsFound = new AtomicBoolean();
             final AtomicBoolean latestFound = new AtomicBoolean();
-            final AtomicReference<Version> latestVersion = new AtomicReference<>();
-            final AtomicReference<Version> latestLtsVersion = new AtomicReference<>();
 
             results.forEach((jsonValue) -> {
                 boolean latest = false;
@@ -136,26 +132,18 @@ class FoojayJdkClient extends JdkClient {
                 final boolean lts = data.getString("term_of_support").equals("lts");
                 final boolean earlyAccess = data.getString("release_status").equals("ea");
 
+
                 if (!earlyAccess && latestFound.compareAndSet(false, true)) {
                     latest = true;
-                    latestVersion.set(new Version(true, lts, version, earlyAccess));
                 }
 
-                if (lts && latestLtsFound.compareAndSet(false, true)) {
-                    latestLtsVersion.set(new Version(true, lts, version, earlyAccess));
+                if (lts && !earlyAccess && latestLtsFound.compareAndSet(false, true)) {
                     latest = true;
                 }
-                if (lts) {
-                    ltsVersions.add(new Version(latest, lts, version, earlyAccess));
-                } else {
-                    availableVersions.add(new Version(latest, lts, version, earlyAccess));
-                }
+
+                availableVersions.add(new Version(latest, lts, version, earlyAccess));
             });
-            return new Versions(
-                    latestVersion.get(),
-                    latestLtsVersion.get(),
-                    ltsVersions,
-                    availableVersions);
+            return new Versions(availableVersions);
         } catch (IOException | InterruptedException e) {
             throw new RuntimeException("Failed to resolve available versions for " + distribution, e);
         }
@@ -252,13 +240,14 @@ class FoojayJdkClient extends JdkClient {
         if (resolve) {
             final OS os = Environment.os();
             final var builder = uriBuilder()
-                    .path("packages/jdks")
+                    .path("packages/")
                     .queryParam("distribution", distribution)
                     .queryParam("architecture", Environment.arch())
                     .queryParam("operating_system", os.name())
                     .queryParam("release_status", "ea,ga")
                     //.queryParam("release_status", "ga")
                     .queryParam("directly_downloadable", "true")
+                    .queryParam("package_type", "jdk")
                     .queryParam("latest", "available");
             if (os == OS.windows) {
                 builder.queryParam("libc_type", "c_std_lib");

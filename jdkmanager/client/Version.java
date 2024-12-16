@@ -31,6 +31,13 @@ public record Version(boolean latest, boolean lts, int version, boolean earlyAcc
 
     @Override
     public int compareTo(final Version o) {
-        return Integer.compare(version, o.version);
+        int result =  Integer.compare(version, o.version);
+        if (result == 0) {
+            result = Boolean.compare(earlyAccess, o.earlyAccess);
+        }
+        if (result == 0) {
+            result = Boolean.compare(lts, o.lts);
+        }
+        return result;
     }
 }

@@ -71,13 +71,12 @@ class AdoptiumJdkClient extends JdkClient {
             final var lts = json.getJsonArray("available_lts_releases");
             final var available = json.getJsonArray("available_releases");
 
-            final Set<Version> ltsVersions = new TreeSet<>();
             final Set<Version> availableVersions = new TreeSet<>();
 
             lts.forEach((jsonValue -> {
                 if (jsonValue.getValueType() == JsonValue.ValueType.NUMBER) {
                     final int v = ((JsonNumber) jsonValue).intValue();
-                    ltsVersions.add(new Version(v == latestLts, true, v, v > latest));
+                    availableVersions.add(new Version(v == latestLts, true, v, v > latest));
                 } else {
                     // TODO (jrp) what do we do here????
                     consoleWriter.printError("Version not a number: %s", jsonValue);
@@ -93,11 +92,7 @@ class AdoptiumJdkClient extends JdkClient {
                     consoleWriter.printError("Version not a number: %s", jsonValue);
                 }
             }));
-            return new Versions(
-                    new Version(true, false, latest, false),
-                    new Version(true, true, latestLts, false),
-                    ltsVersions,
-                    availableVersions);
+            return new Versions(availableVersions);
         } catch (IOException | InterruptedException e) {
             throw new RuntimeException("Failed to resolve available versions for " + distribution, e);
         }

@@ -72,8 +72,10 @@ class ListCommand extends BaseCommand {
         final var versions = client.getVersions();
         print("@|bold LTS Versions for %s|@", distribution);
         versions.lts().forEach(listConsumer(true));
-        print("@|bold Versions for %s|@", distribution);
-        versions.available().forEach(listConsumer(false));
+        print("@|bold STS Versions for %s|@", distribution);
+        versions.sts().forEach(listConsumer(false));
+        print("@|bold Early Access Versions for %s|@", distribution);
+        versions.earlyAccess().forEach(listConsumer(false));
         return 0;
     }
 
