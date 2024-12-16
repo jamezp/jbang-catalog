@@ -209,6 +209,19 @@ public class Environment {
     }
 
     /**
+     * Resolves a cached file.
+     *
+     * @param name       the name of the cached file
+     * @param daysToKeep the number of days to keep the cache for
+     *
+     * @return the cached file, which may or may not exist
+     */
+    public static CacheFile resolveCacheFile(final String name, final int daysToKeep) {
+        final var cacheFile = CACHE_DIR.resolve(name);
+        return new CacheFile(cacheFile, daysToKeep);
+    }
+
+    /**
      * Checks if a directory is empty.
      *
      * @param dir the directory to check

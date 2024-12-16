@@ -124,7 +124,7 @@ public abstract class JdkClient implements AutoCloseable {
         return new UriBuilder(baseUri);
     }
 
-    CacheFile versionsJson() throws IOException {
+    CacheFile versionsJson() {
         return Environment.resolveCacheFile(String.format("%s-versions.json", distribution));
     }
 

@@ -30,7 +30,16 @@ import java.time.ZoneId;
  *
  * @author <a href="mailto:jperkins@redhat.com">James R. Perkins</a>
  */
-public record CacheFile(Path file) {
+public record CacheFile(Path file, int daysToKeep) {
+
+    public CacheFile(final Path file) {
+        this(file, 0);
+    }
+
+    public CacheFile(final Path file, final int daysToKeep) {
+        this.file = file;
+        this.daysToKeep = daysToKeep > 0 ? (daysToKeep - 1) : 0;
+    }
 
     /**
      * Simply deletes the file.
@@ -55,7 +64,8 @@ public record CacheFile(Path file) {
             if (Files.exists(file)) {
                 final var lastModified = Files.getLastModifiedTime(file).toInstant();
                 final var lastModDate = LocalDate.ofInstant(lastModified, ZoneId.systemDefault());
-                if (lastModDate.isBefore(LocalDate.now())) {
+                final var cacheDate = LocalDate.now().minusDays(daysToKeep);
+                if (lastModDate.isBefore(cacheDate)) {
                     return true;
                 }
             } else {

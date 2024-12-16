@@ -65,7 +65,7 @@ class FoojayJdkClient extends JdkClient {
     @Override
     public Distributions supportedDistributions() {
         try {
-            final CacheFile cache = Environment.resolveCacheFile("foojay-distributions.json");
+            final CacheFile cache = Environment.resolveCacheFile("foojay-distributions.json", 14);
             if (cache.requiresDownload()) {
                 cache.expire();
             }
