@@ -127,6 +127,9 @@ abstract class BaseCommand implements Callable<Integer> {
         };
         final Path tempFile = Environment.resolveTempFile(distribution, javaHome.getFileName()
                 .toString(), "jdk-info.out");
+        if (Files.notExists(tempFile)) {
+            Files.createFile(tempFile);
+        }
         try {
             final Process process = new ProcessBuilder(commands)
                     .redirectErrorStream(true)
