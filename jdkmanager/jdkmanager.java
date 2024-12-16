@@ -5,7 +5,9 @@
 //DEPS org.eclipse.parsson:parsson:1.1.4
 //DEPS org.apache.commons:commons-compress:1.24.0
 //DEPS me.tongfei:progressbar:0.10.0
-//SOURCES *.java,client/*.java,util/*.java
+//SOURCES client/AdoptiumJdkClient.java,client/CacheFile.java,client/Distribution.java,client/Distributions.java,client/FoojayJdkClient.java,client/JdkClient.java,client/Version.java,client/Versions.java
+//SOURCES util/Archives.java,util/Environment.java
+//SOURCES BaseCommand.java,ConsoleWriter.java,DistributionCommand.java,InfoCommand.java,InstallCommand.java,ListCommand.java
 
 package jdkmanager;
 
