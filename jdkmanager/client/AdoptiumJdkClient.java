@@ -34,6 +34,7 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.atomic.AtomicReference;
 
 import jakarta.json.Json;
 import jakarta.json.JsonNumber;
@@ -73,13 +74,14 @@ class AdoptiumJdkClient extends JdkClient {
 
             final Set<Version> availableVersions = new TreeSet<>();
 
+            final AtomicReference<RuntimeException> error = new AtomicReference<>();
+
             lts.forEach((jsonValue -> {
                 if (jsonValue.getValueType() == JsonValue.ValueType.NUMBER) {
                     final int v = ((JsonNumber) jsonValue).intValue();
                     availableVersions.add(new Version(v == latestLts, true, v, v > latest));
                 } else {
-                    // TODO (jrp) what do we do here????
-                    consoleWriter.printError("Version not a number: %s", jsonValue);
+                    error.set(new RuntimeException(String.format("Version not a number: %s", jsonValue)));
                 }
             }));
 
@@ -88,10 +90,12 @@ class AdoptiumJdkClient extends JdkClient {
                     final int v = ((JsonNumber) jsonValue).intValue();
                     availableVersions.add(new Version(v == latest, false, v, v > latest));
                 } else {
-                    // TODO (jrp) what do we do here????
-                    consoleWriter.printError("Version not a number: %s", jsonValue);
+                    error.set(new RuntimeException(String.format("Version not a number: %s", jsonValue)));
                 }
             }));
+            if (error.get() != null) {
+                throw error.get();
+            }
             return new Versions(availableVersions);
         } catch (IOException | InterruptedException e) {
             throw new RuntimeException("Failed to resolve available versions for " + distribution, e);

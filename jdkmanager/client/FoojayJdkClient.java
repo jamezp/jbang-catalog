@@ -295,8 +295,7 @@ class FoojayJdkClient extends JdkClient {
         try {
             json = getVersionJson();
         } catch (IOException | InterruptedException e) {
-            // TODO (jrp) property handle this
-            throw new RuntimeException(e);
+            throw new RuntimeException("Could not resolve the versions.", e);
         }
         // Find the version we're looking for
         final JsonArray results = json.getJsonArray("result");
@@ -317,7 +316,6 @@ class FoojayJdkClient extends JdkClient {
         }
 
         if (directLink == null) {
-            // TODO (jrp) do something better
             throw new RuntimeException("Could not find download link for " + version);
         }
         return new Download(URI.create(directLink), fileName);

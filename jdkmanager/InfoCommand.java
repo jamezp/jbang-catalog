@@ -72,10 +72,10 @@ class InfoCommand extends BaseCommand {
             final Path javaHome = Environment.resolveJavaHome(distribution, version);
             if (Files.notExists(javaHome) || Environment.isEmpty(javaHome)) {
                 if (downloadIfMissing) {
-                    // TODO (jrp) we need to determine this somehow
                     final int exitCode = client.download(javaHome, version, !verbose)
                             .toCompletableFuture().get();
                     if (exitCode > 0) {
+                        printError("Failed to download Java %d", version);
                         return exitCode;
                     }
                 } else {

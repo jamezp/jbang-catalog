@@ -33,7 +33,6 @@ import picocli.CommandLine;
         subcommands = AutoComplete.GenerateCompletion.class)
 public class InstallCommand extends BaseCommand {
 
-    // TODO (jrp) add an option to look for JavaFX included
     @CommandLine.Parameters(arity = "0..1", description = "The version you'd like to install if missing and resolve the path to set for the JAVA_HOME environment variable.")
     private int version;
 
