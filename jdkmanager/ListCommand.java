@@ -69,13 +69,29 @@ class ListCommand extends BaseCommand {
                 return exitCode.get();
             }
         }
+
         final var versions = client.getVersions();
-        print("@|bold LTS Versions for %s|@", distribution);
-        versions.lts().forEach(listConsumer(true));
-        print("@|bold STS Versions for %s|@", distribution);
-        versions.sts().forEach(listConsumer(false));
-        print("@|bold Early Access Versions for %s|@", distribution);
-        versions.earlyAccess().forEach(listConsumer(false));
+
+        // LTS versions
+        final var ltsVersions = versions.lts();
+        if (!ltsVersions.isEmpty()) {
+            print("@|bold LTS Versions for %s|@", distribution);
+            versions.lts().forEach(listConsumer(true));
+        }
+
+        // STS versions
+        final var stsVersions = versions.sts();
+        if (!stsVersions.isEmpty()) {
+            print("@|bold STS Versions for %s|@", distribution);
+            versions.sts().forEach(listConsumer(false));
+        }
+
+        // Early access
+        final var earlyAccess = versions.earlyAccess();
+        if (!earlyAccess.isEmpty()) {
+            print("@|bold Early Access Versions for %s|@", distribution);
+            versions.earlyAccess().forEach(listConsumer(false));
+        }
         return 0;
     }
 
