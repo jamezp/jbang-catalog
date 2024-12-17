@@ -46,7 +46,7 @@ public record CacheFile(Path file, int daysToKeep) {
      *
      * @throws IOException if an error occurs deleting the file
      */
-    void expire() throws IOException {
+    public void evict() throws IOException {
         Files.deleteIfExists(file);
     }
 

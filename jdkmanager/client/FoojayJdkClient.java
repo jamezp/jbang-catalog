@@ -65,9 +65,9 @@ class FoojayJdkClient extends JdkClient {
     @Override
     public Distributions supportedDistributions() {
         try {
-            final CacheFile cache = Environment.resolveCacheFile("foojay-distributions.json", 14);
+            final CacheFile cache = supportedCacheFile();
             if (cache.requiresDownload()) {
-                cache.expire();
+                cache.evict();
             }
             final Path file = cache.file();
             if (Files.notExists(file)) {
@@ -109,9 +109,9 @@ class FoojayJdkClient extends JdkClient {
     }
 
     @Override
-    public void expireCache() throws IOException {
-        super.expireCache();
-        Environment.resolveCacheFile("foojay-distributions.json").expire();
+    public void evictCache() throws IOException {
+        super.evictCache();
+        Environment.resolveCacheFile("foojay-distributions.json").evict();
     }
 
     @Override

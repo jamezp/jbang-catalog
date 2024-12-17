@@ -75,8 +75,23 @@ public abstract class JdkClient implements AutoCloseable {
      */
     public abstract Distributions supportedDistributions();
 
-    public void expireCache() throws IOException {
-        versionsJson().expire();
+    /**
+     * Returns the cache file used for the distribution names.
+     *
+     * @return the cache file
+     */
+    public CacheFile supportedCacheFile() {
+        return Environment.resolveCacheFile("distributions.json", 14);
+    }
+
+    /**
+     * Evicts the known cache files for the client.
+     *
+     * @throws IOException if an error occurs evicting the cached files
+     */
+    public void evictCache() throws IOException {
+        versionsJson().evict();
+        supportedCacheFile().evict();
     }
 
     /**

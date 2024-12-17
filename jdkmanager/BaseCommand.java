@@ -63,7 +63,7 @@ abstract class BaseCommand implements Callable<Integer> {
         try {
             try (JdkClient client = JdkClient.of(console, distribution)) {
                 if (refresh) {
-                    client.expireCache();
+                    client.evictCache();
                 }
                 final Distributions distributions = client.supportedDistributions();
                 if (distributions.isSupported(distribution)) {
