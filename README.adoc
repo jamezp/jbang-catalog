@@ -66,31 +66,34 @@ Listing the available JDK's for download:
 [source,bash]
 ----
 jdk-manager list
-LTS Versions
+LTS Versions for temurin
   8
   11
   17
  *21
-Versions
-  8
-  11
+STS Versions for temurin
   16
-  17
   18
   19
   20
-  21
+  22
+  23
+  24
+Early Access Versions for temurin
+  24
+  25
 ----
 
 Listing locally installed JDK's from this tool:
 ----
 jdk-manager list --local
-Eclipse Adoptium 17.0.8.1 (2023-08-24): /home/jperkins/.jdk-manager/jdk-17
-Eclipse Adoptium 20.0.2 (2023-07-18): /home/jperkins/.jdk-manager/jdk-20
-Eclipse Adoptium 11.0.20.1 (2023-08-24): /home/jperkins/.jdk-manager/jdk-11
-Temurin 1.8.0_382 (null): /home/jperkins/.jdk-manager/jdk-8
-Eclipse Adoptium 22-beta (2024-03-19): /home/jperkins/.jdk-manager/jdk-22
-Eclipse Adoptium 21 (2023-09-19): /home/jperkins/.jdk-manager/jdk-21
+IBM Corporation 23.0.1 (2024-10-15): /home/jperkins/.jdk-manager/semeru/jdk-23
+Eclipse Adoptium 17.0.13 (2024-10-15): /home/jperkins/.jdk-manager/temurin/jdk-17
+Eclipse Adoptium 21.0.5 (2024-10-15): /home/jperkins/.jdk-manager/temurin/jdk-21
+Eclipse Adoptium 23.0.1 (2024-10-15): /home/jperkins/.jdk-manager/temurin/jdk-23
+Eclipse Adoptium 24-beta (2025-03-18): /home/jperkins/.jdk-manager/temurin/jdk-24
+Eclipse Adoptium 25-beta (2025-09-16): /home/jperkins/.jdk-manager/temurin/jdk-25
+Temurin 1.8.0_432 (null): /home/jperkins/.jdk-manager/temurin/jdk-8
 ----
 
 Installing a JDK
