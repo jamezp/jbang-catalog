@@ -1,7 +1,7 @@
 ///usr/bin/env jbang "$0" "$@" ; exit $?
 //JAVA 11+
-//DEPS info.picocli:picocli:4.7.5
-//DEPS org.jsoup:jsoup:1.17.2
+//DEPS info.picocli:picocli:4.7.7
+//DEPS org.jsoup:jsoup:1.19.1
 
 import java.io.IOException;
 import java.io.InputStream;
