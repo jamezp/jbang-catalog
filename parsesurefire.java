@@ -34,9 +34,11 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.RecursiveAction;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
@@ -114,6 +116,9 @@ public class parsesurefire implements Callable<Integer> {
 
     @Option(names = {"--sort-by"}, description = "The order to sort the results. The options are ${COMPLETION-CANDIDATES}", defaultValue = "status")
     private SortBy sortBy;
+
+    @Option(names = {"-t", "--total-time"}, description = "Prints the total time all tests took.")
+    private boolean printTotalTime;
 
     @SuppressWarnings("unused")
     @Option(names = {"-h", "--help"}, usageHelp = true, description = "Display this help message")
@@ -200,31 +205,33 @@ public class parsesurefire implements Callable<Integer> {
 
     private Map<Path, EnumMap<Status, Set<TestResult>>> parseFile(final FileSystem fs, final Path file) throws IOException, InterruptedException {
         final Map<Path, EnumMap<Status, Set<TestResult>>> grouped = new TreeMap<>();
+        final Lock lock = new ReentrantLock();
         if (Files.isDirectory(file)) {
-            final ForkJoinPool pool = new ForkJoinPool();
+            final ExecutorService executor = Executors.newWorkStealingPool();
             final var pattern = fs.getPathMatcher("glob:**/TEST-*.xml");
             final var globalResults = createResultMap();
             try (Stream<Path> files = Files.walk(file)) {
                 files.filter(pattern::matches)
-                        .forEach(p -> pool.submit(new RecursiveAction() {
-                            @Override
-                            protected void compute() {
-                                final EnumMap<Status, Set<TestResult>> results;
-                                if (group) {
-                                    synchronized (grouped) {
-                                        results = grouped.computeIfAbsent(p.getParent(), (current) -> createResultMap());
-                                    }
-                                } else {
-                                    synchronized (grouped) {
-                                        results = grouped.computeIfAbsent(file, (current) -> globalResults);
-                                    }
-                                }
-                                parseResults(p, results);
+                        .forEach(p -> executor.submit(() -> {
+                            if (verbose) {
+                                print(format("@|cyan Processing file %s|@", p));
                             }
+                            final EnumMap<Status, Set<TestResult>> results;
+                            lock.lock();
+                            try {
+                                if (group) {
+                                    results = grouped.computeIfAbsent(p.getParent(), (current) -> createResultMap());
+                                } else {
+                                    results = grouped.computeIfAbsent(file, (current) -> globalResults);
+                                }
+                            } finally {
+                                lock.unlock();
+                            }
+                            parseResults(p, results);
                         }));
             }
-            pool.shutdown();
-            if (!pool.awaitTermination(60L, TimeUnit.MINUTES)) {
+            executor.shutdown();
+            if (!executor.awaitTermination(60L, TimeUnit.MINUTES)) {
                 throw new CommandLine.ExecutionException(spec.commandLine(), "Parsing did not complete within 60 minutes.");
             }
         } else {
@@ -245,6 +252,7 @@ public class parsesurefire implements Callable<Integer> {
     }
 
     private void printTotals(final EnumMap<Status, Set<TestResult>> results, final boolean printDetail) {
+        BigDecimal totalTime = new BigDecimal("0.000");
         final Set<TestResult> passedResults = new TreeSet<>(results.get(Status.PASSED));
         final Set<TestResult> failedResults = new TreeSet<>(results.get(Status.FAILED));
         final Set<TestResult> errorResults = new TreeSet<>(results.get(Status.ERROR));
@@ -284,7 +292,7 @@ public class parsesurefire implements Callable<Integer> {
                     if (entry.getValue().isEmpty()) {
                         print("No %s tests found.", entry.getKey().name());
                     } else {
-                        printResult(entry.getKey(), entry.getValue());
+                        totalTime = totalTime.add(printResult(entry.getKey(), entry.getValue()));
                     }
                     print();
                 }
@@ -317,9 +325,14 @@ public class parsesurefire implements Callable<Integer> {
                     comparator = Comparator.comparing(testResult -> testResult.time);
                 }
                 combined.sort(comparator);
-                printSortedResult(sortBy, combined);
+                totalTime = totalTime.add(printSortedResult(sortBy, combined));
             }
             print();
+        } else {
+            totalTime = totalTime.add(calculateTotalTime(passedResults));
+            totalTime = totalTime.add(calculateTotalTime(failedResults));
+            totalTime = totalTime.add(calculateTotalTime(errorResults));
+            totalTime = totalTime.add(calculateTotalTime(skippedResults));
         }
         // Print a summary
         // Determine the output length
@@ -327,10 +340,15 @@ public class parsesurefire implements Callable<Integer> {
         print("*".repeat(len));
         print(totalSummary);
         print("*".repeat(len));
+        if (printTotalTime || verbose) {
+            final BigDecimal millis = totalTime.multiply(new BigDecimal(1000));
+            print("@|bold,white Total Test Time: %s|@", toHumanReadable(Duration.ofMillis(millis.longValue())));
+        }
     }
 
-    private void printResult(final Status status, final Set<TestResult> results) {
+    private BigDecimal printResult(final Status status, final Set<TestResult> results) {
         final var prefix = status.name().charAt(0) + status.name().substring(1).toLowerCase(Locale.ROOT);
+        BigDecimal totalTime = new BigDecimal("0.000");
         print("@|bold,white %s Tests:|@", prefix);
         String currentTest = null;
         int totalCount = 0;
@@ -358,6 +376,7 @@ public class parsesurefire implements Callable<Integer> {
             totalCount++;
             currentTest = result.className;
             printDetail(result);
+            totalTime = totalTime.add(result.time);
         }
         if (count > 0) {
             print(countFormat, currentTest, count);
@@ -365,9 +384,10 @@ public class parsesurefire implements Callable<Integer> {
         if (totalCount > 0) {
             print("@|bold,%s Total %s: %d|@", getStatusColor(status), status.toString().toLowerCase(Locale.ROOT), totalCount);
         }
+        return totalTime;
     }
 
-    private void printSortedResult(final SortBy sortBy, final List<TestResult> results) {
+    private BigDecimal printSortedResult(final SortBy sortBy, final List<TestResult> results) {
         String currentTest = null;
         BigDecimal totalTime = new BigDecimal("0.000");
         for (TestResult result : results) {
@@ -389,6 +409,7 @@ public class parsesurefire implements Callable<Integer> {
         if (sortBy == SortBy.time) {
             print("@|bold,white Total Time: %s|@", totalTime);
         }
+        return totalTime;
     }
 
     private void printDetail(final TestResult result) {
@@ -466,6 +487,14 @@ public class parsesurefire implements Callable<Integer> {
             addTestResult(TestResult.passed(file, test.attr("classname"), test.attr("name"), createTime(test.attr("time"))),
                     passedResults);
         }
+    }
+
+    private BigDecimal calculateTotalTime(final Set<TestResult> results) {
+        BigDecimal totalTime = new BigDecimal("0.000");
+        for (TestResult result : results) {
+            totalTime = totalTime.add(result.time);
+        }
+        return totalTime;
     }
 
     private void addTestResult(final TestResult result, final Set<TestResult> results) {
