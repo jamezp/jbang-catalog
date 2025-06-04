@@ -135,3 +135,32 @@ jbang build --fresh echo-server@jamezp
 echo-server --tcp -p 9514
 echo-server --http -p 8080
 ----
+
+=== `zip-util`
+
+This is a simple utility that allows you to query archive files. It allows you to recursively inspect files. This can
+be useful for things like WAR's where there may be embedded JAR's you want to see the contents of.
+
+==== Installation
+
+The simplest way to install the command is with the https://www.jbang.dev/documentation/guide/latest/alias_catalogs.html[JBang Alias].
+
+[source,bash]
+----
+jbang app install zip-util@jamezp
+----
+
+To update the application:
+
+[source,bash]
+----
+jbang build --fresh zip-util@jamezp
+----
+
+==== Usage
+
+[source,bash]
+----
+zip-util -r my.war
+zip-util -e "{arquillian*}.jar" -r my-test.ear
+----
