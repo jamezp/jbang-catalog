@@ -18,6 +18,7 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.PosixFileAttributes;
+import java.text.DecimalFormat;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -39,7 +40,7 @@ import picocli.CommandLine.Parameters;
         showDefaultValues = true, subcommands = AutoComplete.GenerateCompletion.class)
 public class ziputil implements Callable<Integer> {
 
-    @Parameters(arity = "1", description = "The archived file to process.", defaultValue = ".")
+    @Parameters(arity = "1", description = "The archived file to process.")
     private Path file;
 
     // TODO (jrp) add this back when we enable extract
@@ -48,6 +49,9 @@ public class ziputil implements Callable<Integer> {
 
     @Option(names = {"-e", "--exclude"}, description = "A glob pattern for the files to exclude.")
     private String exclude;
+
+    @Option(names = {"-h", "--human-readable"}, description = "Displays the size in human readable format (e.g., 1KB 128MB 2.1GB)")
+    private boolean humanReadable;
 
     @Option(names = {"-i", "--include"}, description = "A glob pattern for the files to include.")
     private String include;
@@ -65,7 +69,7 @@ public class ziputil implements Callable<Integer> {
     private SortBy sortBy;
 
     @SuppressWarnings("unused")
-    @Option(names = {"-h", "--help"}, usageHelp = true, description = "Display this help message")
+    @Option(names = {"--help"}, usageHelp = true, description = "Display this help message")
     private boolean usageHelpRequested;
 
     @Option(names = {"-v", "--verbose"}, description = "Prints verbose output.")
@@ -93,7 +97,7 @@ public class ziputil implements Callable<Integer> {
     @Override
     public Integer call() throws Exception {
         if (!isZip(file)) {
-            throw new CommandLine.ExecutionException(spec.commandLine(), "The file must be a ZIP, JAR, EAR, WAR, etc.");
+            throw new CommandLine.ExecutionException(spec.commandLine(), String.format("The file %s must be a ZIP, JAR, EAR, WAR, etc.", file));
         }
 
         // Process the file
@@ -101,7 +105,6 @@ public class ziputil implements Callable<Integer> {
             final var comparator = (reversed ? sortBy.comparator.reversed() : sortBy.comparator);
             final Set<PathDescription> files = new TreeSet<>(comparator);
             collectContents(fs, file.getFileName().toString(), fs.getSeparator(), createFilter(), files);
-
             String archiveName = "";
             for (PathDescription f : files) {
                 if (!archiveName.equals(f.archiveName())) {
@@ -109,14 +112,15 @@ public class ziputil implements Callable<Integer> {
                     archiveName = f.archiveName();
                 }
                 if (verbose) {
-                    print(4, "%10d %tc %s", f.attributes().size(), f.attributes()
+                    final String size = (humanReadable ? SizeUnit.toHumanReadable(f.attributes()
+                            .size()) : Long.toString(f.attributes().size()));
+                    print(4, "%10s %tc %s", size, f.attributes()
                             .creationTime()
                             .toMillis(), f.path());
                 } else {
                     print(4, "%s", f.path());
                 }
             }
-            ;
         }
         return 0;
     }
@@ -310,6 +314,71 @@ public class ziputil implements Callable<Integer> {
         @Override
         public int compare(final PathDescription o1, final PathDescription o2) {
             return comparator.compare(o1, o2);
+        }
+    }
+
+    private enum SizeUnit {
+        BYTE(1L, "B") {
+            @Override
+            public String toString(final long size) {
+                return size + "B";
+            }
+        },
+        KILOBYTE(BYTE, "KB"),
+        MEGABYTE(KILOBYTE, "MB"),
+        GIGABYTE(MEGABYTE, "GB"),
+        TERABYTE(GIGABYTE, "TB"),
+        PETABYTE(TERABYTE, "PB"),
+        EXABYTE(TERABYTE, "EB"),
+
+        ;
+        private static final DecimalFormat FORMAT = new DecimalFormat("#.##");
+        private final long sizeInBytes;
+        private final String abbreviation;
+
+        SizeUnit(final long sizeInBytes, final String abbreviation) {
+            this.sizeInBytes = sizeInBytes;
+            this.abbreviation = abbreviation;
+        }
+
+        SizeUnit(final SizeUnit base, final String abbreviation) {
+            this.sizeInBytes = base.sizeInBytes << 10;
+            this.abbreviation = abbreviation;
+        }
+
+        /**
+         * Converts the size to a human-readable string format.
+         * <p>
+         * For example {@code SizeUnit.KILOBYTE.toString(1024L)} would return "1 KB".
+         * </p>
+         *
+         * @param size the size, in bytes
+         *
+         * @return a human-readable size
+         */
+        protected String toString(final long size) {
+            return FORMAT.format((double) size / sizeInBytes) + abbreviation;
+        }
+
+        /**
+         * Converts the size, in bytes, to a human-readable form. For example {@code 1024} bytes return "1 KB".
+         *
+         * @param size the size, in bytes, to convert
+         *
+         * @return a human-readable size
+         */
+        private static String toHumanReadable(final long size) {
+            if (size == 0L) {
+                return "0B";
+            }
+            final SizeUnit[] values = values();
+            for (int i = values.length - 1; i >= 0; i--) {
+                final SizeUnit unit = values[i];
+                if (size >= unit.sizeInBytes) {
+                    return unit.toString(size);
+                }
+            }
+            return size + "B";
         }
     }
 }
