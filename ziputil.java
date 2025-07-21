@@ -18,7 +18,7 @@ import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.PosixFileAttributes;
-import java.util.Collection;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -58,6 +58,12 @@ public class ziputil implements Callable<Integer> {
     @Option(names = {"-r", "--recursive"}, description = "Recursively processes the file.")
     private boolean recursive;
 
+    @Option(names = {"--reversed"}, description = "Reverses the sort order of the results.")
+    private boolean reversed;
+
+    @Option(names = {"-s", "--sort-by"}, description = "The order to sort the results. The options are ${COMPLETION-CANDIDATES}", defaultValue = "name")
+    private SortBy sortBy;
+
     @SuppressWarnings("unused")
     @Option(names = {"-h", "--help"}, usageHelp = true, description = "Display this help message")
     private boolean usageHelpRequested;
@@ -92,7 +98,8 @@ public class ziputil implements Callable<Integer> {
 
         // Process the file
         try (FileSystem fs = zipFs(file)) {
-            final Set<PathDescription> files = new TreeSet<>();
+            final var comparator = (reversed ? sortBy.comparator.reversed() : sortBy.comparator);
+            final Set<PathDescription> files = new TreeSet<>(comparator);
             collectContents(fs, file.getFileName().toString(), fs.getSeparator(), createFilter(), files);
 
             String archiveName = "";
@@ -114,7 +121,7 @@ public class ziputil implements Callable<Integer> {
         return 0;
     }
 
-    private void collectContents(final FileSystem fs, final String archivePath, final String path, final PathFilter filter, final Collection<PathDescription> entries) throws IOException {
+    private void collectContents(final FileSystem fs, final String archivePath, final String path, final PathFilter filter, final Set<PathDescription> entries) throws IOException {
         final var baseDir = fs.getPath(path);
         try (DirectoryStream<Path> dirStream = Files.newDirectoryStream(baseDir, filter)) {
             for (final Path childPath : dirStream) {
@@ -283,14 +290,26 @@ public class ziputil implements Callable<Integer> {
 
     private record PathDescription(String archiveName, String path,
                                    BasicFileAttributes attributes, PosixFileAttributes posixFileAttributes,
-                                   Map<String, Object> allAttributes) implements Comparable<PathDescription> {
+                                   Map<String, Object> allAttributes) {
+    }
+
+    private enum SortBy implements Comparator<PathDescription> {
+        size(Comparator.comparing(PathDescription::archiveName)
+                .thenComparingLong((pd) -> pd.attributes().size())
+                .thenComparing(PathDescription::path)),
+        name(Comparator.comparing(PathDescription::archiveName).thenComparing(PathDescription::path)),
+        lastModifiedTime(Comparator.comparing(PathDescription::archiveName)
+                .thenComparing((pd) -> pd.attributes().lastModifiedTime())
+                .thenComparing(PathDescription::path)),;
+        private final Comparator<PathDescription> comparator;
+
+        SortBy(final Comparator<PathDescription> comparator) {
+            this.comparator = comparator;
+        }
+
         @Override
-        public int compareTo(final PathDescription o) {
-            int result = archiveName.compareTo(o.archiveName);
-            if (result == 0) {
-                result = path.compareTo(o.path);
-            }
-            return result;
+        public int compare(final PathDescription o1, final PathDescription o2) {
+            return comparator.compare(o1, o2);
         }
     }
 }
