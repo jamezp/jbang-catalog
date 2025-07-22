@@ -302,9 +302,10 @@ public class ziputil implements Callable<Integer> {
                 .thenComparingLong((pd) -> pd.attributes().size())
                 .thenComparing(PathDescription::path)),
         name(Comparator.comparing(PathDescription::archiveName).thenComparing(PathDescription::path)),
-        lastModifiedTime(Comparator.comparing(PathDescription::archiveName)
-                .thenComparing((pd) -> pd.attributes().lastModifiedTime())
-                .thenComparing(PathDescription::path)),;
+        creationTime(Comparator.comparing(PathDescription::archiveName)
+                .thenComparing((pd) -> pd.attributes().creationTime())
+                .thenComparing(PathDescription::path)),
+        ;
         private final Comparator<PathDescription> comparator;
 
         SortBy(final Comparator<PathDescription> comparator) {
