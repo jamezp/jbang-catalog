@@ -13,6 +13,10 @@
       "script-ref": "EchoServer.java",
       "description": "A utility which echos output from a TCP socket, UDP socket or HTTP server to stdout."
     },
+    "jira-from-pr": {
+      "script-ref": "JiraFromPullRequest.java",
+      "description": "Creates a JIRA based on a GitHub PR. Please note this is very specific to Red Hat JIRA and GitHub."
+    },
     "zip-util": {
       "script-ref": "ziputil.java",
       "description": "A utility to query, recursively, information in a ZIP, JAR, WAR, etc. file."
