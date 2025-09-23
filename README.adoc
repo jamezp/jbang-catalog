@@ -136,6 +136,71 @@ echo-server --tcp -p 9514
 echo-server --http -p 8080
 ----
 
+=== `jira-from-pr`
+
+This is a utility, specifically designed for Red Hat JIRA, which creates a JIRA based on a GitHub Pull Request. It is
+useful when there is a need to create a JIRA for a dependabot pull request.
+
+It requires two files be present on your local file system in your home directory, preferably with 0600 permissions on
+the files:
+
+1. `.github`
+2. `.jira`
+
+The `.github` file must have an entry for `oatuh` where the value is simply a GitHub token. This file and property name
+is adopted from https://hub4j.github.io/github-api/.
+
+The `.jira` file must have the following two properties:
+
+1. `username` where the value is your JIRA username
+2. `token` where the value is a token you must create for your JIRA user.
+
+==== Installation
+
+The simplest way to install the command is with the https://www.jbang.dev/documentation/guide/latest/alias_catalogs.html[JBang Alias].
+
+[source,bash]
+----
+jbang app install jira-from-pr@jamezp
+----
+
+To update the application:
+
+[source,bash]
+----
+jbang build --fresh jira-from-pr@jamezp
+----
+
+==== Usage
+
+There are 3 required parameters:
+
+
+|===
+|Argument |Description
+
+|`-o`, `--organization`
+|The GitHub organization where the pull request is located.
+
+|`-r`, `--repository`
+|The GitHub repository where the pull request is located.
+
+|`-p`, `--project`
+|The JIRA project at https://issues.redhat.com
+|===
+
+[source,bash]
+----
+jira-from-pr -o resteasy -r resteasy -p RESTEASY 4686
+----
+
+For details on additional parameters execute:
+[source,bash]
+----
+jira-from-pr -h
+----
+
+
 === `zip-util`
 
 This is a simple utility that allows you to query archive files. It allows you to recursively inspect files. This can
