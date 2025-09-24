@@ -19,6 +19,8 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.Callable;
@@ -30,7 +32,6 @@ import jakarta.json.JsonReader;
 import jakarta.json.stream.JsonGenerator;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
-import org.jsoup.nodes.Node;
 import picocli.AutoComplete;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
@@ -60,8 +61,11 @@ class JiraFromPullRequest implements Callable<Integer> {
     @Option(names = {"-v", "--verbose"}, description = "Turns on more verbose output.", defaultValue = "false")
     private boolean verbose;
 
-    @Parameters(arity = "1", description = "The PR number to create the JIRA from")
-    private String prNumber;
+    @Parameters(arity = "1..*", description = {"Pull request numbers to update with the newly created JIRA.",
+            "Only one JIRA will be created and each pull request will be updated with links to the JIRA.",
+            "The first pull request is used to get the data for the JIRA."
+    })
+    private String[] pullRequestIds;
 
     @CommandLine.Spec
     private CommandLine.Model.CommandSpec spec;
@@ -102,103 +106,125 @@ class JiraFromPullRequest implements Callable<Integer> {
                 throw new ValidationException("Missing the token and/or username configuration properties in %s", jiraConfigFile);
             }
 
+            if (pullRequestIds == null || pullRequestIds.length == 0) {
+                throw new CommandLine.ParameterException(spec.commandLine(), "At least one pull request must be provided as an argument.");
+            }
+
             // Get the PR information
             final String githubBaseUri = githubConfig.getProperty("endpoint", "https://api.github.com");
-            final URI prUri = createUri(githubBaseUri, "repos", organization, repository, "pulls", prNumber);
+
+            final String issueJiraUri = "https://issues.redhat.com/rest/api/2/issue";
 
             try (HttpClient client = HttpClient.newHttpClient()) {
-                final HttpRequest request = createGitHubRequest(prUri, oauth).build();
-                final HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
-                if (response.statusCode() != 200) {
-                    throw new ValidationException("Request to %s ended with a status code of %d: %s", githubBaseUri, response.statusCode(), toString(response.body()));
+                final Collection<String> pullRequestLinks = new ArrayList<>();
+                String jiraId = null;
+                for (String pullRequestId : pullRequestIds) {
+                    final URI prUri = createUri(githubBaseUri, "repos", organization, repository, "pulls", pullRequestId);
+                    final HttpRequest request = createGitHubRequest(prUri, oauth).build();
+                    final HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+                    if (response.statusCode() != 200) {
+                        throw new ValidationException("Request to %s ended with a status code of %d: %s", githubBaseUri, response.statusCode(), toString(response.body()));
+                    }
+                    try (
+                            InputStream inputStream = response.body();
+                            JsonReader reader = Json.createReader(inputStream)
+                    ) {
+                        final var json = reader.readObject();
+                        if (!json.getString("state").equals("open")) {
+                            // Only throw an exception if the first PR is not open. Print an error, but ignore for
+                            // additional PR's.
+                            if (jiraId == null) {
+                                throw new ValidationException("Pull request %s is not open. The state is %s", pullRequestId, json.getString("state"));
+                            } else {
+                                printError("Pull request %s is not open and will not be updated. The state is %s", pullRequestId, json.getString("state"));
+                                continue;
+                            }
+                        }
+                        final String title = json.getString("title");
+                        final String body = json.getString("body");
+                        pullRequestLinks.add(json.getString("html_url"));
+
+                        // Only create the JIRA if it was not previously created
+                        if (jiraId == null) {
+
+                            // We need to parse the body to get only the parts we need
+                            final String description = attemptDescriptionCleanUp(body);
+                            final JsonObject jiraPayload = createJiraPayload(username, title, description, json);
+                            print("Creating JIRA for pull request %s", pullRequestId);
+                            final JsonObject v;
+                            if (dryRun) {
+                                print("JIRA would be created with the following payload: %n%s", toString(jiraPayload));
+                                // Create a fake response result
+                                v = Json.createObjectBuilder()
+                                        .add("key", project + "-XXXX")
+                                        .build();
+                            } else {
+                                final HttpRequest jiraRequest = createJiraRequest(URI.create(issueJiraUri), token)
+                                        .setHeader("content-type", "application/json")
+                                        .POST(HttpRequest.BodyPublishers.ofString(jiraPayload.toString()))
+                                        .build();
+                                final HttpResponse<InputStream> jiraResponse = client.send(jiraRequest, HttpResponse.BodyHandlers.ofInputStream());
+                                if (jiraResponse.statusCode() != 201) {
+                                    throw new ValidationException("JIRA issue not created for PR %s. The HTTP status is %d: %s", pullRequestId, jiraResponse.statusCode(), toString(response.body()));
+                                }
+                                try (JsonReader responseReader = Json.createReader(jiraResponse.body())) {
+                                    v = responseReader.readObject();
+                                }
+                            }
+                            // Get the JIRA id
+                            jiraId = v.getString("key");
+                        }
+                        final var newTitle = String.format("[%s] %s", jiraId, title);
+                        // Create a patch update
+                        final var patchBody = Json.createObjectBuilder()
+                                .add("title", newTitle)
+                                .add("body", String.format("Issue: https://issues.redhat.com/browse/%s\n\n%s", jiraId, body))
+                                .build();
+                        print("Updating pull request %s with new title: %s", pullRequestId, newTitle);
+                        if (dryRun) {
+                            print("Patch to update PR %s%n%s", pullRequestId, toString(patchBody));
+                        } else {
+                            final HttpRequest patchRequest = createGitHubRequest(prUri, oauth)
+                                    .method("PATCH", HttpRequest.BodyPublishers.ofString(patchBody.toString()))
+                                    .build();
+                            final HttpResponse<String> patchResponse = client.send(patchRequest, HttpResponse.BodyHandlers.ofString());
+                            // Check the status of the update
+                            if (patchResponse.statusCode() != 200) {
+                                throw new ValidationException("Failed to update GitHub PR title for PR %s. HTTP status %d: %s", pullRequestId, patchResponse.statusCode(), patchResponse.body());
+                            }
+                        }
+                    }
                 }
-                try (
-                        InputStream inputStream = response.body();
-                        JsonReader reader = Json.createReader(inputStream)
-                ) {
-                    final var json = reader.readObject();
-                    if (!json.getString("state").equals("open")) {
-                        throw new ValidationException("Pull request %s is not open. The state is %s", prNumber, json.getString("state"));
-                    }
-                    final String title = json.getString("title");
-                    final String body = json.getString("body");
 
-                    // We need to parse the body to get only the parts we need
-                    final String description = attemptDescriptionCleanUp(body);
-                    final JsonObject jiraPayload = createJiraPayload(username, title, description, json);
-
-                    final var issueJiraUri = "https://issues.redhat.com/rest/api/2/issue";
-                    print("Creating JIRA for pull request %s", prNumber);
-                    final JsonObject v;
-                    if (dryRun) {
-                        print("JIRA would be created with the following payload: %n%s", toString(jiraPayload));
-                        // Create a fake response result
-                        v = Json.createObjectBuilder()
-                                .add("key", project + "-XXXX")
-                                .build();
-                    } else {
-                        final HttpRequest jiraRequest = createJiraRequest(URI.create(issueJiraUri), token)
-                                .setHeader("content-type", "application/json")
-                                .POST(HttpRequest.BodyPublishers.ofString(jiraPayload.toString()))
-                                .build();
-                        final HttpResponse<InputStream> jiraResponse = client.send(jiraRequest, HttpResponse.BodyHandlers.ofInputStream());
-                        if (jiraResponse.statusCode() != 201) {
-                            throw new ValidationException("JIRA issue not created for PR %s. The HTTP status is %d: %s", prNumber, jiraResponse.statusCode(), toString(response.body()));
-                        }
-                        try (JsonReader responseReader = Json.createReader(jiraResponse.body())) {
-                            v = responseReader.readObject();
-                        }
-                    }
-                    // Get the JIRA id
-                    final var id = v.getString("key");
-                    final var newTitle = String.format("[%s] %s", id, title);
-                    // Create a patch update
-                    final var patchBody = Json.createObjectBuilder()
-                            .add("title", newTitle)
-                            .add("body", String.format("Issue: https://issues.redhat.com/browse/%s\n\n%s", id, body))
+                // Transition the JIRA
+                final var transitionPayload = Json.createObjectBuilder()
+                        // Link Pull Request -> Pull Request Sent
+                        .add("transition", Json.createObjectBuilder().add("id", "711"))
+                        .add("fields", Json.createObjectBuilder()
+                                .add("customfield_12310220", String.join(",", pullRequestLinks)))
+                        .build();
+                // Git Pull Request field, hard-coding for now
+                if (dryRun) {
+                    print("Attempting to transition the %s to the status %s", jiraId, transitionPayload);
+                } else {
+                    print("Transitioning JIRA %s to Pull Request Sent and linking pull request %s", jiraId, String.join(",", pullRequestLinks));
+                    // Finally transition the PR to Pull Request Sent
+                    final HttpRequest transitionRequest = createJiraRequest(createUri(issueJiraUri, jiraId, "transitions"), token)
+                            .setHeader("content-type", "application/json")
+                            .POST(HttpRequest.BodyPublishers.ofString(transitionPayload.toString()))
                             .build();
-                    print("Updating pull request %s with new title: %s", prNumber, newTitle);
-                    if (dryRun) {
-                        print("Patch to update PR %s%n%s", prNumber, toString(patchBody));
-                    } else {
-                        final HttpRequest patchRequest = createGitHubRequest(prUri, oauth)
-                                .method("PATCH", HttpRequest.BodyPublishers.ofString(patchBody.toString()))
-                                .build();
-                        final HttpResponse<String> patchResponse = client.send(patchRequest, HttpResponse.BodyHandlers.ofString());
-                        // Check the status of the update
-                        if (patchResponse.statusCode() != 200) {
-                            throw new ValidationException("Failed to update GitHub PR title for PR %s. HTTP status %d: %s", prNumber, patchResponse.statusCode(), patchResponse.body());
-                        }
-                    }
-
-                    // Transition the JIRA
-                    final var transitionPayload = Json.createObjectBuilder()
-                            // Link Pull Request -> Pull Request Sent
-                            .add("transition", Json.createObjectBuilder().add("id", "711"))
-                            .add("fields", Json.createObjectBuilder().add("customfield_12310220", json.getString("html_url")))
-                            .build();
-                    // Git Pull Request field, hard-coding for now
-                    if (dryRun) {
-                        print("Attempting to transition the %s to the status %s", id, transitionPayload);
-                    } else {
-                        print("Transitioning JIRA %s to Pull Request Sent and linking pull request %s", id, json.getString("html_url"));
-                        // Finally transition the PR to Pull Request Sent
-                        final HttpRequest transitionRequest = createJiraRequest(createUri(issueJiraUri, id, "transitions"), token)
-                                .setHeader("content-type", "application/json")
-                                .POST(HttpRequest.BodyPublishers.ofString(transitionPayload.toString()))
-                                .build();
-                        final HttpResponse<String> transitionResponse = client.send(transitionRequest, HttpResponse.BodyHandlers.ofString());
-                        if (transitionResponse.statusCode() != 204) {
-                            throw new ValidationException("Failed to transition JIRA to Pull Request Sent.  HTTP status %d: %s", transitionResponse.statusCode(), transitionResponse.body());
-                        }
+                    final HttpResponse<String> transitionResponse = client.send(transitionRequest, HttpResponse.BodyHandlers.ofString());
+                    if (transitionResponse.statusCode() != 204) {
+                        throw new ValidationException("Failed to transition JIRA to Pull Request Sent.  HTTP status %d: %s", transitionResponse.statusCode(), transitionResponse.body());
                     }
                 }
             }
         } catch (Exception e) {
             printError(e.getMessage());
             if (verbose) {
-                try (StringWriter sw = new StringWriter();
-                     PrintWriter pw = new PrintWriter(sw)
+                try (
+                        StringWriter sw = new StringWriter();
+                        PrintWriter pw = new PrintWriter(sw)
                 ) {
                     e.printStackTrace(pw);
                     pw.flush();
@@ -276,45 +302,81 @@ class JiraFromPullRequest implements Callable<Integer> {
     }
 
     private static String attemptDescriptionCleanUp(final String description) {
-        final Pattern pattern = Pattern.compile("(\\[.*)]\\((http.*)\\)(.*)");
+        final Pattern mdLinkPattern = Pattern.compile("(\\[.*)]\\((http.*)\\)(.*)");
+        final Pattern inlineCodePattern = Pattern.compile("`(.*)`");
         final StringBuilder builder = new StringBuilder();
-        final int first = description.indexOf('\n');
 
-        builder.append(pattern.matcher(description.substring(0, first)).replaceFirst("$1|$2]$3")).append("\n\n");
+        boolean inDetails = false;
 
-        final Document document = Jsoup.parse(description.substring(first));
+        final StringBuilder html = new StringBuilder();
 
-        // Get all the details
-        final var details = document.select("details");
-        for (final var detail : details) {
-            if (detail.select("summary").text().contains("Dependabot commands and options")) {
+        for (String line : description.lines().toList()) {
+            if (line.isEmpty()) {
+                builder.append('\n');
                 continue;
             }
-            final Node sectionDescription = detail.previousSibling();
-            if (sectionDescription != null && !sectionDescription.nodeValue().isBlank()) {
-                builder.append("----\nh3. ").append(sectionDescription).append("\n\n");
+            // If the line includes @dependabot, we're at instructions we can ignore
+            if (line.contains("@dependabot")) {
+                break;
             }
-            if (!detail.select("summary").text().contains("Commits")) {
-                continue;
-            }
-            final var listItems = detail.select("li");
-            for (final var listItem : listItems) {
-                builder.append("* ");
-                final var a = listItem.select("a").first();
-                if (a != null) {
-                    final var hash = a.text();
-                    final String text = ("compare view".equalsIgnoreCase(hash)) ? hash : "{{" + hash + "}}";
-                    builder.append('[').append(text).append('|').append(a.attr("href")).append(']');
-                    builder.append(' ').append(listItem.text().replace(hash, ""));
-                } else {
-                    builder.append(listItem.text());
+            final var inLineCodeMatcher = inlineCodePattern.matcher(line);
+            line = inLineCodeMatcher.replaceAll("{{$1}}");
+            final var matcher = mdLinkPattern.matcher(line);
+            if (matcher.matches()) {
+                builder.append(matcher.replaceFirst("$1|$2]$3"));
+            } else {
+                // If this line is a <detail> tag, we're inside HTML so we will process until we find the ending tag
+                if ("<details>".equals(line)) {
+                    inDetails = true;
+                    continue;
                 }
+                if ("</details>".equals(line)) {
+                    inDetails = false;
+                    final Document document = Jsoup.parseBodyFragment(html.toString());
+                    html.setLength(0);
+                    appendDetails(document, builder);
+                    continue;
+                }
+                if (inDetails) {
+                    html.append(line);
+                } else {
+                    builder.append(line).append("\n");
+                }
+            }
+        }
+        // Clear any HTML breaks before returning
+        final Pattern htmlBreakPattern = Pattern.compile("<br\\s*/?>");
+        return htmlBreakPattern.matcher(builder).replaceAll("");
+    }
+
+    private static void appendDetails(final Document document, final StringBuilder builder) {
+        final var summary = document.selectFirst("summary");
+        if (summary != null && summary.text().contains("Dependabot commands and options")) {
+            return;
+        }
+        // Get all the details
+        final var listItems = document.select("li");
+        final var iterator = listItems.iterator();
+        while (iterator.hasNext()) {
+            final var listItem = iterator.next();
+            builder.append("* ");
+            final var a = listItem.select("a").first();
+            if (a != null) {
+                final var code = a.selectFirst("code");
+                if (code == null) {
+                    builder.append(listItem.nodeValue());
+                    builder.append('[').append(a.nodeValue()).append('|').append(a.attr("href")).append(']');
+                } else {
+                    builder.append("[{{").append(code.text()).append("}}|").append(a.attr("href")).append(']');
+                    builder.append(' ').append(listItem.nodeValue());
+                }
+            } else {
+                builder.append(listItem.text());
+            }
+            if (iterator.hasNext()) {
                 builder.append('\n');
             }
-            builder.append('\n');
         }
-
-        return builder.toString();
     }
 
     private static URI createUri(final String baseUri, final String... paths) {
