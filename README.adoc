@@ -194,6 +194,12 @@ There are 3 required parameters:
 jira-from-pr -o resteasy -r resteasy -p RESTEASY 4686
 ----
 
+You can pass more than one pull request to the command to allow additional pull requests to be updated with the JIRA.
+Only the first pull request is used to create the JIRA. Each additional pull request is simply updated with the JIRA
+information and a link to the pull request is added to the JIRA.
+
+TIP: Use this option when you have the same version upgrade on two different branches.
+
 For details on additional parameters execute:
 [source,bash]
 ----
