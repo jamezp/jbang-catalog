@@ -316,32 +316,29 @@ class JiraFromPullRequest implements Callable<Integer> {
                 continue;
             }
             // If the line includes @dependabot, we're at instructions we can ignore
-            if (line.contains("@dependabot")) {
+            if (line.contains("@dependabot") || line.contains("Dependabot compatibility score")) {
                 break;
             }
             final var inLineCodeMatcher = inlineCodePattern.matcher(line);
             line = inLineCodeMatcher.replaceAll("{{$1}}");
             final var matcher = mdLinkPattern.matcher(line);
-            if (matcher.matches()) {
-                builder.append(matcher.replaceFirst("$1|$2]$3"));
+            line = matcher.replaceFirst("$1|$2]$3");
+            // If this line is a <detail> tag, we're inside HTML so we will process until we find the ending tag
+            if ("<details>".equals(line)) {
+                inDetails = true;
+                continue;
+            }
+            if ("</details>".equals(line)) {
+                inDetails = false;
+                final Document document = Jsoup.parseBodyFragment(html.toString());
+                html.setLength(0);
+                appendDetails(document, builder);
+                continue;
+            }
+            if (inDetails) {
+                html.append(line);
             } else {
-                // If this line is a <detail> tag, we're inside HTML so we will process until we find the ending tag
-                if ("<details>".equals(line)) {
-                    inDetails = true;
-                    continue;
-                }
-                if ("</details>".equals(line)) {
-                    inDetails = false;
-                    final Document document = Jsoup.parseBodyFragment(html.toString());
-                    html.setLength(0);
-                    appendDetails(document, builder);
-                    continue;
-                }
-                if (inDetails) {
-                    html.append(line);
-                } else {
-                    builder.append(line).append("\n");
-                }
+                builder.append(line).append("\n");
             }
         }
         // Clear any HTML breaks before returning
