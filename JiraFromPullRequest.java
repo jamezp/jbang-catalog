@@ -112,10 +112,13 @@ class JiraFromPullRequest implements Callable<Integer> {
 
             // Get the PR information
             final String githubBaseUri = githubConfig.getProperty("endpoint", "https://api.github.com");
-
-            final String issueJiraUri = "https://issues.redhat.com/rest/api/2/issue";
+            final String baseJiraUri = "https://issues.redhat.com/rest/api/2/";
 
             try (HttpClient client = HttpClient.newHttpClient()) {
+                // Validate the issue type
+                if (!validateIssueType(client, baseJiraUri, token)) {
+                    throw new ValidationException("Issue type \"%s\" is not valid for project %s. Please provide a valid --issue-type with a valid name.", issueType, project);
+                }
                 final Collection<String> pullRequestLinks = new ArrayList<>();
                 String jiraId = null;
                 for (String pullRequestId : pullRequestIds) {
@@ -159,13 +162,13 @@ class JiraFromPullRequest implements Callable<Integer> {
                                         .add("key", project + "-XXXX")
                                         .build();
                             } else {
-                                final HttpRequest jiraRequest = createJiraRequest(URI.create(issueJiraUri), token)
+                                final HttpRequest jiraRequest = createJiraRequest(createUri(baseJiraUri, "issues"), token)
                                         .setHeader("content-type", "application/json")
                                         .POST(HttpRequest.BodyPublishers.ofString(jiraPayload.toString()))
                                         .build();
                                 final HttpResponse<InputStream> jiraResponse = client.send(jiraRequest, HttpResponse.BodyHandlers.ofInputStream());
                                 if (jiraResponse.statusCode() != 201) {
-                                    throw new ValidationException("JIRA issue not created for PR %s. The HTTP status is %d: %s", pullRequestId, jiraResponse.statusCode(), toString(response.body()));
+                                    throw new ValidationException("JIRA issue not created for PR %s. The HTTP status is %d: %s", pullRequestId, jiraResponse.statusCode(), toString(jiraResponse.body()));
                                 }
                                 try (JsonReader responseReader = Json.createReader(jiraResponse.body())) {
                                     v = responseReader.readObject();
@@ -209,7 +212,7 @@ class JiraFromPullRequest implements Callable<Integer> {
                 } else {
                     print("Transitioning JIRA %s to Pull Request Sent and linking pull request %s", jiraId, String.join(",", pullRequestLinks));
                     // Finally transition the PR to Pull Request Sent
-                    final HttpRequest transitionRequest = createJiraRequest(createUri(issueJiraUri, jiraId, "transitions"), token)
+                    final HttpRequest transitionRequest = createJiraRequest(createUri(baseJiraUri, "issue", jiraId, "transitions"), token)
                             .setHeader("content-type", "application/json")
                             .POST(HttpRequest.BodyPublishers.ofString(transitionPayload.toString()))
                             .build();
@@ -301,6 +304,24 @@ class JiraFromPullRequest implements Callable<Integer> {
         return jsonBuilder.build();
     }
 
+    private boolean validateIssueType(final HttpClient client, final String uri, final String token) throws IOException, InterruptedException {
+        final HttpRequest request = createJiraRequest(createUri(uri, "project", project), token)
+                .GET()
+                .build();
+        final HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
+        try (JsonReader reader = Json.createReader(new InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
+            final JsonObject object = reader.readObject();
+            final var issueTypes = object.getJsonArray("issueTypes");
+            for (final var type : issueTypes) {
+                final var name = type.asJsonObject().getString("name");
+                if (issueType.equals(name)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private static String attemptDescriptionCleanUp(final String description) {
         final Pattern mdLinkPattern = Pattern.compile("(\\[.*)]\\((http.*)\\)(.*)");
         final Pattern inlineCodePattern = Pattern.compile("`(.*)`");
@@ -343,7 +364,7 @@ class JiraFromPullRequest implements Callable<Integer> {
         }
         // Clear any HTML breaks before returning
         final Pattern htmlBreakPattern = Pattern.compile("<br\\s*/?>");
-        return htmlBreakPattern.matcher(builder).replaceAll("");
+        return htmlBreakPattern.matcher(builder).replaceAll("").stripTrailing();
     }
 
     private static void appendDetails(final Document document, final StringBuilder builder) {
