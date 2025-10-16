@@ -162,7 +162,7 @@ class JiraFromPullRequest implements Callable<Integer> {
                                         .add("key", project + "-XXXX")
                                         .build();
                             } else {
-                                final HttpRequest jiraRequest = createJiraRequest(createUri(baseJiraUri, "issues"), token)
+                                final HttpRequest jiraRequest = createJiraRequest(createUri(baseJiraUri, "issue"), token)
                                         .setHeader("content-type", "application/json")
                                         .POST(HttpRequest.BodyPublishers.ofString(jiraPayload.toString()))
                                         .build();
