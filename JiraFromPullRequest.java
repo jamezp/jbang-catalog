@@ -20,18 +20,27 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.Callable;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import jakarta.json.Json;
+import jakarta.json.JsonArray;
+import jakarta.json.JsonArrayBuilder;
 import jakarta.json.JsonObject;
+import jakarta.json.JsonObjectBuilder;
 import jakarta.json.JsonReader;
 import jakarta.json.stream.JsonGenerator;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.nodes.Node;
+import org.jsoup.nodes.TextNode;
 import picocli.AutoComplete;
 import picocli.CommandLine;
 import picocli.CommandLine.Command;
@@ -42,6 +51,8 @@ import picocli.CommandLine.Parameters;
         description = "Create a JIRA based on a GitHub PR. Note this is very specific to Red Hat JIRA.",
         showDefaultValues = true, subcommands = AutoComplete.GenerateCompletion.class)
 class JiraFromPullRequest implements Callable<Integer> {
+
+    private static final Pattern MARKDOWN_PATTERN = Pattern.compile("\\[(?<linkText>[^]]+)]\\((?<url>[^)]+)\\)|`(?<code>[^`]+)`");
 
     @Option(names = "--dry-run", description = "Indicates this should be a dry run and no updates will be performed.")
     private boolean dryRun;
@@ -112,11 +123,11 @@ class JiraFromPullRequest implements Callable<Integer> {
 
             // Get the PR information
             final String githubBaseUri = githubConfig.getProperty("endpoint", "https://api.github.com");
-            final String baseJiraUri = "https://issues.redhat.com/rest/api/2/";
+            final String baseJiraUri = "%s/rest/api/3".formatted(jiraConfig.getProperty("baseUri", "https://redhat.atlassian.net"));
 
             try (HttpClient client = HttpClient.newHttpClient()) {
                 // Validate the issue type
-                if (!validateIssueType(client, baseJiraUri, token)) {
+                if (!validateIssueType(client, baseJiraUri, username, token)) {
                     throw new ValidationException("Issue type \"%s\" is not valid for project %s. Please provide a valid --issue-type with a valid name.", issueType, project);
                 }
                 final Collection<String> pullRequestLinks = new ArrayList<>();
@@ -151,8 +162,7 @@ class JiraFromPullRequest implements Callable<Integer> {
                         if (jiraId == null) {
 
                             // We need to parse the body to get only the parts we need
-                            final String description = attemptDescriptionCleanUp(body);
-                            final JsonObject jiraPayload = createJiraPayload(username, title, description, json);
+                            final JsonObject jiraPayload = createJiraPayload(username, title, body);
                             print("Creating JIRA for pull request %s", pullRequestId);
                             final JsonObject v;
                             if (dryRun) {
@@ -162,7 +172,7 @@ class JiraFromPullRequest implements Callable<Integer> {
                                         .add("key", project + "-XXXX")
                                         .build();
                             } else {
-                                final HttpRequest jiraRequest = createJiraRequest(createUri(baseJiraUri, "issue"), token)
+                                final HttpRequest jiraRequest = createJiraRequest(createUri(baseJiraUri, "issue"), username, token)
                                         .setHeader("content-type", "application/json")
                                         .POST(HttpRequest.BodyPublishers.ofString(jiraPayload.toString()))
                                         .build();
@@ -204,7 +214,7 @@ class JiraFromPullRequest implements Callable<Integer> {
                         // Link Pull Request -> Pull Request Sent
                         .add("transition", Json.createObjectBuilder().add("id", "711"))
                         .add("fields", Json.createObjectBuilder()
-                                .add("customfield_12310220", String.join(",", pullRequestLinks)))
+                                .add("customfield_10875", createPrLinkList(pullRequestLinks)))
                         .build();
                 // Git Pull Request field, hard-coding for now
                 if (dryRun) {
@@ -212,7 +222,7 @@ class JiraFromPullRequest implements Callable<Integer> {
                 } else {
                     print("Transitioning JIRA %s to Pull Request Sent and linking pull request %s", jiraId, String.join(",", pullRequestLinks));
                     // Finally transition the PR to Pull Request Sent
-                    final HttpRequest transitionRequest = createJiraRequest(createUri(baseJiraUri, "issue", jiraId, "transitions"), token)
+                    final HttpRequest transitionRequest = createJiraRequest(createUri(baseJiraUri, "issue", jiraId, "transitions"), username, token)
                             .setHeader("content-type", "application/json")
                             .POST(HttpRequest.BodyPublishers.ofString(transitionPayload.toString()))
                             .build();
@@ -245,9 +255,11 @@ class JiraFromPullRequest implements Callable<Integer> {
                 .setHeader("authorization", "Bearer " + oauth);
     }
 
-    private HttpRequest.Builder createJiraRequest(final URI uri, final String token) {
+    private HttpRequest.Builder createJiraRequest(final URI uri, final String username, final String token) {
+        final String encoded = Base64.getEncoder()
+                .encodeToString("%s:%s".formatted(username, token).getBytes(StandardCharsets.UTF_8));
         return HttpRequest.newBuilder(uri)
-                .setHeader("authorization", "Bearer " + token)
+                .setHeader("authorization", "Basic %s".formatted(encoded))
                 .setHeader("accept", "application/json");
     }
 
@@ -286,7 +298,7 @@ class JiraFromPullRequest implements Callable<Integer> {
         return ansi.string(value);
     }
 
-    private JsonObject createJiraPayload(final String username, final String title, final String description, final JsonObject json) {
+    private JsonObject createJiraPayload(final String username, final String title, final String body) {
 
         final var jsonBuilder = Json.createObjectBuilder();
 
@@ -295,7 +307,13 @@ class JiraFromPullRequest implements Callable<Integer> {
         fields.add("project", Json.createObjectBuilder().add("key", project));
 
         fields.add("summary", title);
-        fields.add("description", description);
+
+        final JsonObjectBuilder content = Json.createObjectBuilder();
+        content.add("type", "doc");
+        content.add("version", 1);
+        addDescription(content, body);
+        fields.add("description", content);
+
         fields.add("issuetype", Json.createObjectBuilder().add("name", issueType));
         fields.add("assignee", Json.createObjectBuilder().add("name", username));
 
@@ -304,13 +322,16 @@ class JiraFromPullRequest implements Callable<Integer> {
         return jsonBuilder.build();
     }
 
-    private boolean validateIssueType(final HttpClient client, final String uri, final String token) throws IOException, InterruptedException {
-        final HttpRequest request = createJiraRequest(createUri(uri, "project", project), token)
+    private boolean validateIssueType(final HttpClient client, final String uri, final String username, final String token) throws IOException, InterruptedException {
+        final HttpRequest request = createJiraRequest(createUri(uri, "project", project), username, token)
                 .GET()
                 .build();
         final HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
         try (JsonReader reader = Json.createReader(new InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
             final JsonObject object = reader.readObject();
+            if (response.statusCode() != 200) {
+                throw new ValidationException("Could not resolve issue types for %s: Status=%d%n%s", project, response.statusCode(), object);
+            }
             final var issueTypes = object.getJsonArray("issueTypes");
             for (final var type : issueTypes) {
                 final var name = type.asJsonObject().getString("name");
@@ -322,82 +343,198 @@ class JiraFromPullRequest implements Callable<Integer> {
         return false;
     }
 
-    private static String attemptDescriptionCleanUp(final String description) {
-        final Pattern mdLinkPattern = Pattern.compile("(\\[.*)]\\((http.*)\\)(.*)");
-        final Pattern inlineCodePattern = Pattern.compile("`(.*)`");
-        final StringBuilder builder = new StringBuilder();
-
+    private static void addDescription(final JsonObjectBuilder jsonDescription, final String description) {
+        final var mainContent = Json.createArrayBuilder();
+        final StringBuilder htmlBuffer = new StringBuilder();
         boolean inDetails = false;
 
-        final StringBuilder html = new StringBuilder();
-
         for (String line : description.lines().toList()) {
-            if (line.isEmpty()) {
-                builder.append('\n');
+            String trimmedLine = line.trim();
+
+            // Skip noise
+            if (trimmedLine.isEmpty() || trimmedLine.matches("(?i)<br\\s*/?>")) continue;
+            if (line.contains("@dependabot") || line.contains("Dependabot compatibility score")) break;
+
+            // Horizontal Rule Support
+            if (trimmedLine.equals("---")) {
+                mainContent.add(Json.createObjectBuilder().add("type", "rule"));
                 continue;
             }
-            // If the line includes @dependabot, we're at instructions we can ignore
-            if (line.contains("@dependabot") || line.contains("Dependabot compatibility score")) {
-                break;
-            }
-            final var inLineCodeMatcher = inlineCodePattern.matcher(line);
-            line = inLineCodeMatcher.replaceAll("{{$1}}");
-            final var matcher = mdLinkPattern.matcher(line);
-            line = matcher.replaceFirst("$1|$2]$3");
-            // If this line is a <detail> tag, we're inside HTML so we will process until we find the ending tag
-            if ("<details>".equals(line)) {
+
+            // HTML Details Toggle
+            if ("<details>".equalsIgnoreCase(trimmedLine)) {
                 inDetails = true;
                 continue;
             }
-            if ("</details>".equals(line)) {
+            if ("</details>".equalsIgnoreCase(trimmedLine)) {
                 inDetails = false;
-                final Document document = Jsoup.parseBodyFragment(html.toString());
-                html.setLength(0);
-                appendDetails(document, builder);
+                final Document document = Jsoup.parseBodyFragment(htmlBuffer.toString());
+                htmlBuffer.setLength(0);
+                appendHtmlAsAdf(document.body(), mainContent, false);
                 continue;
             }
+
             if (inDetails) {
-                html.append(line);
-            } else {
-                builder.append(line).append("\n");
+                htmlBuffer.append(line).append(" ");
+                continue;
             }
+
+            // Markdown Paragraph Parser
+            final var paragraphContent = Json.createArrayBuilder();
+            final Matcher matcher = MARKDOWN_PATTERN.matcher(line);
+            int lastEnd = 0;
+
+            while (matcher.find()) {
+                if (matcher.start() > lastEnd) {
+                    paragraphContent.add(createTextContent(line.substring(lastEnd, matcher.start())));
+                }
+
+                if (matcher.group("linkText") != null) {
+                    paragraphContent.add(createLink(matcher.group("linkText"), matcher.group("url")));
+                } else if (matcher.group("code") != null) {
+                    paragraphContent.add(createTextContent(matcher.group("code"), "code", null));
+                }
+                lastEnd = matcher.end();
+            }
+
+            if (lastEnd < line.length()) {
+                paragraphContent.add(createTextContent(line.substring(lastEnd)));
+            }
+
+            mainContent.add(Json.createObjectBuilder()
+                    .add("type", "paragraph")
+                    .add("content", paragraphContent));
         }
-        // Clear any HTML breaks before returning
-        final Pattern htmlBreakPattern = Pattern.compile("<br\\s*/?>");
-        return htmlBreakPattern.matcher(builder).replaceAll("").stripTrailing();
+        jsonDescription.add("content", mainContent);
     }
 
-    private static void appendDetails(final Document document, final StringBuilder builder) {
-        final var summary = document.selectFirst("summary");
-        if (summary != null && summary.text().contains("Dependabot commands and options")) {
-            return;
-        }
-        // Get all the details
-        final var listItems = document.select("li");
-        final var iterator = listItems.iterator();
-        while (iterator.hasNext()) {
-            final var listItem = iterator.next();
-            builder.append("* ");
-            final var a = listItem.select("a").first();
-            if (a != null) {
-                final var code = a.selectFirst("code");
-                if (code == null) {
-                    builder.append(listItem.nodeValue());
-                    builder.append('[').append(a.nodeValue()).append('|').append(a.attr("href")).append(']');
-                } else {
-                    builder.append("[{{").append(code.text()).append("}}|").append(a.attr("href")).append(']');
-                    builder.append(' ').append(listItem.nodeValue());
+    private static void appendHtmlAsAdf(final Node rootNode, final JsonArrayBuilder mainContent, final boolean isInBlockquote) {
+        for (Node child : rootNode.childNodes()) {
+            if (child instanceof Element el) {
+                String tagName = el.tagName().toLowerCase();
+                switch (tagName) {
+                    case "h1", "h2", "h3", "h4" -> {
+                        // ADF Rule: blockquote cannot contain headings. Convert to bold paragraph if nested.
+                        if (isInBlockquote) {
+                            mainContent.add(Json.createObjectBuilder()
+                                    .add("type", "paragraph")
+                                    .add("content", Json.createArrayBuilder()
+                                            .add(createTextContent(el.text(), "strong", null))));
+                        } else {
+                            mainContent.add(createHeading(el.text(), Integer.parseInt(tagName.substring(1))));
+                        }
+                    }
+                    case "blockquote" -> {
+                        final var quoteContent = Json.createArrayBuilder();
+                        // Recurse with isInBlockquote = true
+                        appendHtmlAsAdf(el, quoteContent, true);
+                        mainContent.add(Json.createObjectBuilder()
+                                .add("type", "blockquote")
+                                .add("content", quoteContent));
+                    }
+                    case "ul", "ol" -> {
+                        final var listContent = Json.createArrayBuilder();
+                        for (Element li : el.select("> li")) {
+                            final var liParaContent = Json.createArrayBuilder();
+                            processInlines(li, liParaContent);
+                            listContent.add(createListItem(liParaContent.build()));
+                        }
+                        mainContent.add(Json.createObjectBuilder()
+                                .add("type", tagName.equals("ul") ? "bulletList" : "orderedList")
+                                .add("content", listContent));
+                    }
+                    case "p" -> {
+                        final var pInlines = Json.createArrayBuilder();
+                        processInlines(el, pInlines);
+                        var builtInlines = pInlines.build();
+                        if (!builtInlines.isEmpty()) {
+                            mainContent.add(Json.createObjectBuilder()
+                                    .add("type", "paragraph")
+                                    .add("content", builtInlines));
+                        }
+                    }
+                    case "summary" -> mainContent.add(Json.createObjectBuilder()
+                            .add("type", "paragraph")
+                            .add("content", Json.createArrayBuilder()
+                                    .add(createTextContent(el.text(), "strong", null))));
+                    case "hr" -> mainContent.add(Json.createObjectBuilder().add("type", "rule"));
+                    default -> appendHtmlAsAdf(el, mainContent, isInBlockquote);
                 }
-            } else {
-                builder.append(listItem.text());
-            }
-            if (iterator.hasNext()) {
-                builder.append('\n');
+            } else if (child instanceof TextNode tn) {
+                String text = tn.getWholeText();
+                if (!text.isBlank()) {
+                    mainContent.add(Json.createObjectBuilder()
+                            .add("type", "paragraph")
+                            .add("content", Json.createArrayBuilder().add(createTextContent(text))));
+                }
             }
         }
+    }
+
+    private static void processInlines(final Node node, final JsonArrayBuilder contentBuilder) {
+        for (Node child : node.childNodes()) {
+            if (child instanceof TextNode tn) {
+                final String text = tn.getWholeText();
+                if (!text.isEmpty()) {
+                    contentBuilder.add(createTextContent(text));
+                }
+            } else if (child instanceof Element el) {
+                final String tagName = el.tagName().toLowerCase();
+                // Map HTML tags to ADF Marks
+                switch (tagName) {
+                    case "a" -> contentBuilder.add(createLink(el.text(), el.attr("href")));
+                    case "code" -> contentBuilder.add(createTextContent(el.text(), "code", null));
+                    case "strong", "b" -> contentBuilder.add(createTextContent(el.text(), "strong", null));
+                    case "em", "i" -> contentBuilder.add(createTextContent(el.text(), "em", null));
+                    // If it's a span or something else, just keep digging for text
+                    default -> processInlines(el, contentBuilder);
+                }
+            }
+        }
+    }
+
+    private static JsonObjectBuilder createHeading(final String text, final int level) {
+        return Json.createObjectBuilder()
+                .add("type", "heading")
+                .add("attrs", Json.createObjectBuilder().add("level", level))
+                .add("content", Json.createArrayBuilder().add(createTextContent(text)));
+    }
+
+    private static JsonObject createListItem(final JsonArray listParagraphContent) {
+        return Json.createObjectBuilder()
+                .add("type", "listItem")
+                .add("content", Json.createArrayBuilder()
+                        .add(Json.createObjectBuilder()
+                                .add("type", "paragraph")
+                                .add("content", listParagraphContent)))
+                .build();
+    }
+
+    private static JsonObjectBuilder createTextContent(final String text) {
+        return Json.createObjectBuilder().add("type", "text").add("text", text);
+    }
+
+    private static JsonObjectBuilder createTextContent(final String text, final String markType, final Map<String, String> attrs) {
+        final var node = Json.createObjectBuilder().add("type", "text").add("text", text);
+        final var mark = Json.createObjectBuilder().add("type", markType);
+        if (attrs != null && !attrs.isEmpty()) {
+            var attrObj = Json.createObjectBuilder();
+            attrs.forEach(attrObj::add);
+            mark.add("attrs", attrObj);
+        }
+        node.add("marks", Json.createArrayBuilder().add(mark));
+        return node;
+    }
+
+    private static JsonObjectBuilder createLink(final String text, final String url) {
+        return createTextContent(text, "link", Map.of("href", url));
     }
 
     private static URI createUri(final String baseUri, final String... paths) {
+        return createUri(baseUri, Map.of(), paths);
+    }
+
+    private static URI createUri(final String baseUri, final Map<String, String> queryParams, final String... paths) {
         final StringBuilder uriBuilder = new StringBuilder();
         uriBuilder.append(baseUri);
         for (String path : paths) {
@@ -406,7 +543,58 @@ class JiraFromPullRequest implements Callable<Integer> {
             }
             uriBuilder.append(path);
         }
+        final AtomicBoolean first = new AtomicBoolean(true);
+        queryParams.forEach((key, value) -> {
+            if (first.compareAndSet(true, false)) {
+                uriBuilder.append('?');
+            } else {
+                uriBuilder.append('&');
+            }
+            uriBuilder.append(key).append('=').append(value);
+        });
         return URI.create(uriBuilder.toString());
+    }
+
+    private static JsonObject createPrLinkList(final Collection<String> prUrls) {
+        final var bulletListContent = Json.createArrayBuilder();
+
+        for (String url : prUrls) {
+            if (url == null || url.isBlank()) continue;
+
+            // Create the link mark with the href attribute
+            final var linkMark = Json.createObjectBuilder()
+                    .add("type", "link")
+                    .add("attrs", Json.createObjectBuilder()
+                            .add("href", url.trim()));
+
+            // Create the text node and attach the mark
+            final var textNode = Json.createObjectBuilder()
+                    .add("type", "text")
+                    .add("text", url.trim())
+                    .add("marks", Json.createArrayBuilder().add(linkMark));
+
+            // Wrap in Paragraph -> ListItem
+            final var listItem = Json.createObjectBuilder()
+                    .add("type", "listItem")
+                    .add("content", Json.createArrayBuilder()
+                            .add(Json.createObjectBuilder()
+                                    .add("type", "paragraph")
+                                    .add("content", Json.createArrayBuilder().add(textNode))));
+
+            bulletListContent.add(listItem);
+        }
+
+        // Build the bulletList object
+        final var bulletList = Json.createObjectBuilder()
+                .add("type", "bulletList")
+                .add("content", bulletListContent);
+
+        // Wrap in the top-level "doc" array (the missing piece from last time!)
+        return Json.createObjectBuilder()
+                .add("version", 1)
+                .add("type", "doc")
+                .add("content", Json.createArrayBuilder().add(bulletList))
+                .build();
     }
 
     private static boolean isNullOrEmpty(final String value) {
