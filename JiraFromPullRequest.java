@@ -191,7 +191,7 @@ class JiraFromPullRequest implements Callable<Integer> {
                         // Create a patch update
                         final var patchBody = Json.createObjectBuilder()
                                 .add("title", newTitle)
-                                .add("body", String.format("Issue: https://issues.redhat.com/browse/%s\n\n%s", jiraId, body))
+                                .add("body", String.format("Issue: https://redhat.atlassian.net/browse/%s\n\n%s", jiraId, body))
                                 .build();
                         print("Updating pull request %s with new title: %s", pullRequestId, newTitle);
                         if (dryRun) {
