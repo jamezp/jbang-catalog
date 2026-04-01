@@ -57,6 +57,13 @@ class JiraFromPullRequest implements Callable<Integer> {
     @Option(names = "--dry-run", description = "Indicates this should be a dry run and no updates will be performed.")
     private boolean dryRun;
 
+    @Option(names = {"-d", "--detail-depth"}, description = {
+            "The number of <detail> tags to include in the JIRA.",
+            "This can be useful when the details are repeated for dependencies.",
+            "A value less than 0 indicates there is no limit."},
+            defaultValue = "-1")
+    private int detailDepth;
+
     @Option(names = {"--issue-type"}, description = "The name of the issue type, e.g. \"Component Upgrade\", \"Bug\", etc.", required = true, defaultValue = "Component Upgrade")
     private String issueType;
 
@@ -343,10 +350,11 @@ class JiraFromPullRequest implements Callable<Integer> {
         return false;
     }
 
-    private static void addDescription(final JsonObjectBuilder jsonDescription, final String description) {
+    private void addDescription(final JsonObjectBuilder jsonDescription, final String description) {
         final var mainContent = Json.createArrayBuilder();
         final StringBuilder htmlBuffer = new StringBuilder();
         boolean inDetails = false;
+        int detailCount = 0;
 
         for (String line : description.lines().toList()) {
             String trimmedLine = line.trim();
@@ -364,6 +372,7 @@ class JiraFromPullRequest implements Callable<Integer> {
             // HTML Details Toggle
             if ("<details>".equalsIgnoreCase(trimmedLine)) {
                 inDetails = true;
+                detailCount++;
                 continue;
             }
             if ("</details>".equalsIgnoreCase(trimmedLine)) {
@@ -377,6 +386,10 @@ class JiraFromPullRequest implements Callable<Integer> {
             if (inDetails) {
                 htmlBuffer.append(line).append(" ");
                 continue;
+            }
+
+            if (detailDepth >= 0 && detailCount > detailDepth) {
+                break;
             }
 
             // Markdown Paragraph Parser
