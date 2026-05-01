@@ -441,9 +441,12 @@ class JiraFromPullRequest implements Callable<Integer> {
                         final var quoteContent = Json.createArrayBuilder();
                         // Recurse with isInBlockquote = true
                         appendHtmlAsAdf(el, quoteContent, true);
-                        mainContent.add(Json.createObjectBuilder()
-                                .add("type", "blockquote")
-                                .add("content", quoteContent));
+                        final var arrayContent = quoteContent.build();
+                        if (!arrayContent.isEmpty()) {
+                            mainContent.add(Json.createObjectBuilder()
+                                    .add("type", "blockquote")
+                                    .add("content", arrayContent));
+                        }
                     }
                     case "ul", "ol" -> {
                         final var listContent = Json.createArrayBuilder();
