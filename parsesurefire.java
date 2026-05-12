@@ -14,6 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystemNotFoundException;
 import java.nio.file.FileSystems;
+import java.nio.file.FileVisitOption;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -210,7 +211,7 @@ public class parsesurefire implements Callable<Integer> {
             final ExecutorService executor = Executors.newWorkStealingPool();
             final var pattern = fs.getPathMatcher("glob:**/TEST-*.xml");
             final var globalResults = createResultMap();
-            try (Stream<Path> files = Files.walk(file)) {
+            try (Stream<Path> files = Files.walk(file, FileVisitOption.FOLLOW_LINKS)) {
                 files.filter(pattern::matches)
                         .forEach(p -> executor.submit(() -> {
                             if (verbose) {
