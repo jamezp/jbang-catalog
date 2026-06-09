@@ -17,6 +17,7 @@ import java.nio.file.FileSystems;
 import java.nio.file.FileVisitOption;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.PathMatcher;
 import java.nio.file.StandardOpenOption;
 import java.text.NumberFormat;
 import java.time.Duration;
@@ -98,6 +99,12 @@ public class parsesurefire implements Callable<Integer> {
     }, showDefaultValue = CommandLine.Help.Visibility.NEVER, defaultValue =
             "@|bold,white Total: %t|@ - @|green PASSED: %p|@ - @|red FAILED: %f|@ - @|bold,red ERRORS: %e|@ - @|yellow SKIPPED: %s|@")
     private String format;
+
+    @Option(names = {"-i", "--include"}, description = "A glob pattern for files to include in the reporting.", defaultValue = "**/TEST-*.xml")
+    private String includePattern;
+
+    @Option(names = {"-e", "--exclude"}, description = "A glob pattern for files to exclude in the reporting.")
+    private String excludePattern;
 
     @Option(names = {"-g", "--group"}, description = "Groups the results by the directory the files were found in.", defaultValue = "false")
     private boolean group;
@@ -209,10 +216,12 @@ public class parsesurefire implements Callable<Integer> {
         final Lock lock = new ReentrantLock();
         if (Files.isDirectory(file)) {
             final ExecutorService executor = Executors.newCachedThreadPool();
-            final var pattern = fs.getPathMatcher("glob:**/TEST-*.xml");
+            final var includePattern = fs.getPathMatcher("glob:" + this.includePattern);
+            final var excludePattern = createExcludeMatcher(fs, this.excludePattern);
             final var globalResults = createResultMap();
             try (Stream<Path> files = Files.walk(file, FileVisitOption.FOLLOW_LINKS)) {
-                files.filter(pattern::matches)
+                files.filter(includePattern::matches)
+                        .filter(excludePattern::matches)
                         .forEach(p -> executor.submit(() -> {
                             if (verbose) {
                                 print(format("@|cyan Processing file %s|@", p));
@@ -241,6 +250,23 @@ public class parsesurefire implements Callable<Integer> {
             grouped.put(file, results);
         }
         return grouped;
+    }
+
+    private PathMatcher createExcludeMatcher(final FileSystem fs, String pattern) {
+        if (pattern == null) {
+            return path -> true;
+        }
+        final var delegate = fs.getPathMatcher("glob:" + pattern);
+        return path -> {
+            final boolean matched = delegate.matches(path);
+            if (matched) {
+                if (verbose) {
+                    print(format("@|yellow Skipping file %s|@", path));
+                }
+            }
+            // We're excluding, we want the opposite of a match
+            return !matched;
+        };
     }
 
     private EnumMap<Status, Set<TestResult>> createResultMap() {
