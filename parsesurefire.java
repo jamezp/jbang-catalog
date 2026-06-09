@@ -208,7 +208,7 @@ public class parsesurefire implements Callable<Integer> {
         final Map<Path, EnumMap<Status, Set<TestResult>>> grouped = new TreeMap<>();
         final Lock lock = new ReentrantLock();
         if (Files.isDirectory(file)) {
-            final ExecutorService executor = Executors.newWorkStealingPool();
+            final ExecutorService executor = Executors.newCachedThreadPool();
             final var pattern = fs.getPathMatcher("glob:**/TEST-*.xml");
             final var globalResults = createResultMap();
             try (Stream<Path> files = Files.walk(file, FileVisitOption.FOLLOW_LINKS)) {
@@ -463,30 +463,29 @@ public class parsesurefire implements Callable<Integer> {
         final Set<TestResult> errorResults = results.get(Status.ERROR);
         final Set<TestResult> skippedResults = results.get(Status.SKIPPED);
 
-        final Elements testsuites = document.select("testsuite");
-        if (testsuites.isEmpty()) {
+        final Elements testsuite = document.select("testsuite");
+        if (testsuite.isEmpty()) {
             return;
         }
 
-        final Elements tests = testsuites.select("testcase");
+        final Elements tests = testsuite.select("testcase");
         for (Element test : tests) {
             final Elements skipped = test.select("skipped");
             if (!skipped.isEmpty()) {
-                addTestResult(parseSkipped(file, test, skipped), skippedResults);
+                addTestResult(parseSkipped(file, testsuite, test, skipped), skippedResults);
                 continue;
             }
             final Elements failure = test.select("failure");
             if (!failure.isEmpty()) {
-                addTestResult(parseFailed(file, test, failure), failedResults);
+                addTestResult(parseFailed(file, testsuite, test, failure), failedResults);
                 continue;
             }
             final Elements errors = test.select("error");
             if (!errors.isEmpty()) {
-                addTestResult(parseError(file, test, errors), errorResults);
+                addTestResult(parseError(file, testsuite, test, errors), errorResults);
                 continue;
             }
-            addTestResult(TestResult.passed(file, test.attr("classname"), test.attr("name"), createTime(test.attr("time"))),
-                    passedResults);
+            addTestResult(TestResult.passed(file, testsuite, test), passedResults);
         }
     }
 
@@ -507,16 +506,16 @@ public class parsesurefire implements Callable<Integer> {
         }
     }
 
-    private TestResult parseSkipped(final Path file, final Element test, final Elements skipped) {
+    private TestResult parseSkipped(final Path file, final Elements testsuite, final Element test, final Elements skipped) {
         final Element e = skipped.first();
         String message = "";
         if (e != null) {
             message = e.attr("message");
         }
-        return TestResult.skipped(file, test.attr("classname"), test.attr("name"), createTime(test.attr("time")), message);
+        return TestResult.skipped(file, testsuite, test, message);
     }
 
-    private TestResult parseFailed(final Path file, final Element test, final Elements failed) {
+    private TestResult parseFailed(final Path file, final Elements testsuite, final Element test, final Elements failed) {
         final Element failure = failed.first();
         String message = "";
         String detailMessage = "";
@@ -524,10 +523,10 @@ public class parsesurefire implements Callable<Integer> {
             message = failure.attr("message");
             detailMessage = failure.hasText() ? failure.text() : "";
         }
-        return TestResult.failed(file, test.attr("classname"), test.attr("name"), createTime(test.attr("time")), message, detailMessage);
+        return TestResult.failed(file, testsuite, test, message, detailMessage);
     }
 
-    private TestResult parseError(final Path file, final Element test, final Elements failed) {
+    private TestResult parseError(final Path file, final Elements testsuite, final Element test, final Elements failed) {
         @SuppressWarnings("DuplicatedCode")
         final Element error = failed.first();
         String message = "";
@@ -536,7 +535,7 @@ public class parsesurefire implements Callable<Integer> {
             message = error.attr("message");
             detailMessage = error.hasText() ? error.text() : "";
         }
-        return TestResult.error(file, test.attr("classname"), test.attr("name"), createTime(test.attr("time")), message, detailMessage);
+        return TestResult.error(file, testsuite, test, message, detailMessage);
     }
 
     private void print() {
@@ -649,19 +648,6 @@ public class parsesurefire implements Callable<Integer> {
         return result.toString();
     }
 
-    private BigDecimal createTime(final String time) {
-        if (time.isBlank()) {
-            return new BigDecimal("0.000");
-        }
-        try {
-            final var n = NumberFormat.getNumberInstance().parse(time);
-            return new BigDecimal(n.toString()).setScale(3, RoundingMode.HALF_UP);
-        } catch (Exception e) {
-            spec.commandLine().getErr().printf("Failed to parse the time %s. Default to 0.000.%n", time);
-            return new BigDecimal("0.000");
-        }
-    }
-
     private static String toHumanReadable(final Duration duration) {
         final long days = duration.toDaysPart();
         final long hours = duration.toHoursPart();
@@ -717,41 +703,37 @@ public class parsesurefire implements Callable<Integer> {
         private final String message;
         private final String detailMessage;
 
-        private TestResult(final Path file, final Status status, final String className, final String testName,
-                           final BigDecimal time, final String message, final String detailMessage) {
+        private TestResult(final Path file, final Status status, final Elements testsuite, final Element test,
+                           final String message, final String detailMessage) {
             this.file = file;
             this.status = status;
-            this.title = className;
-            this.className = parseTestClassName(file, className);
-            this.testName = testName;
-            this.time = time;
+            this.title = testsuite.attr("name");
+            this.className = parseTestClassName(file, test.attr("classname"));
+            this.testName = test.attr("name");
+            this.time = parseTime(test.attr("time"));
             this.message = message == null ? "" : message;
             this.detailMessage = detailMessage == null ? "" : detailMessage;
         }
 
-        static TestResult passed(final Path file, final String className, final String testName,
-                                 final BigDecimal time) {
-            return new TestResult(file, Status.PASSED, className, testName, time, null, null);
+        static TestResult passed(final Path file, final Elements testsuite, final Element test) {
+            return new TestResult(file, Status.PASSED, testsuite, test, null, null);
         }
 
-        static TestResult skipped(final Path file, final String className, final String testName, final BigDecimal time,
-                                  final String message) {
-            return new TestResult(file, Status.SKIPPED, className, testName, time, message, null);
+        static TestResult skipped(final Path file, final Elements testsuite, final Element test, final String message) {
+            return new TestResult(file, Status.SKIPPED, testsuite, test, message, null);
         }
 
-        static TestResult failed(final Path file, final String className, final String testName, final BigDecimal time,
-                                 final String message, final String detailMessage) {
-            return new TestResult(file, Status.FAILED, className, testName, time, message, detailMessage);
+        static TestResult failed(final Path file, final Elements testsuite, final Element test, final String message, final String detailMessage) {
+            return new TestResult(file, Status.FAILED, testsuite, test, message, detailMessage);
         }
 
-        static TestResult error(final Path file, final String className, final String testName, final BigDecimal time,
-                                final String message, final String detailMessage) {
-            return new TestResult(file, Status.ERROR, className, testName, time, message, detailMessage);
+        static TestResult error(final Path file, final Elements testsuite, final Element test, final String message, final String detailMessage) {
+            return new TestResult(file, Status.ERROR, testsuite, test, message, detailMessage);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(className, testName, status);
+            return Objects.hash(file, className, testName, status);
         }
 
         @Override
@@ -763,7 +745,8 @@ public class parsesurefire implements Callable<Integer> {
                 return false;
             }
             final TestResult other = (TestResult) obj;
-            return Objects.equals(className, other.className)
+            return Objects.equals(file, other.file)
+                    && Objects.equals(className, other.className)
                     && Objects.equals(testName, other.testName)
                     && Objects.equals(status, other.status);
         }
@@ -775,7 +758,11 @@ public class parsesurefire implements Callable<Integer> {
 
         @Override
         public int compareTo(final TestResult o) {
-            int result = className.compareTo(o.className);
+            int result = file.compareTo(o.file);
+            if (result != 0) {
+                return result;
+            }
+            result = className.compareTo(o.className);
             if (result != 0) {
                 return result;
             }
@@ -798,6 +785,18 @@ public class parsesurefire implements Callable<Integer> {
                 return fileName.substring(start + 5, end).trim();
             }
             return className;
+        }
+
+        private static BigDecimal parseTime(final String time) {
+            if (time.isBlank()) {
+                return new BigDecimal("0.000");
+            }
+            try {
+                final var n = NumberFormat.getNumberInstance().parse(time);
+                return new BigDecimal(n.toString()).setScale(3, RoundingMode.HALF_UP);
+            } catch (Exception e) {
+                return new BigDecimal("0.000");
+            }
         }
     }
 }
