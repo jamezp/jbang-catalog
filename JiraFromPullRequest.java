@@ -449,15 +449,30 @@ class JiraFromPullRequest implements Callable<Integer> {
                         }
                     }
                     case "ul", "ol" -> {
-                        final var listContent = Json.createArrayBuilder();
-                        for (Element li : el.select("> li")) {
-                            final var liParaContent = Json.createArrayBuilder();
-                            processInlines(li, liParaContent);
-                            listContent.add(createListItem(liParaContent.build()));
+                        if (isInBlockquote) {
+                            // ADF Rule: blockquote cannot contain lists. Convert to flattened paragraphs with bullet characters.
+                            for (Element li : el.select("> li")) {
+                                final var liParaContent = Json.createArrayBuilder();
+                                // Prepend a unicode bullet to fake the list visually
+                                liParaContent.add(createTextContent("• "));
+                                processInlines(li, liParaContent);
+
+                                mainContent.add(Json.createObjectBuilder()
+                                        .add("type", "paragraph")
+                                        .add("content", liParaContent.build()));
+                            }
+                        } else {
+                            // Standard list behavior outside of blockquotes
+                            final var listContent = Json.createArrayBuilder();
+                            for (Element li : el.select("> li")) {
+                                final var liParaContent = Json.createArrayBuilder();
+                                processInlines(li, liParaContent);
+                                listContent.add(createListItem(liParaContent.build()));
+                            }
+                            mainContent.add(Json.createObjectBuilder()
+                                    .add("type", tagName.equals("ul") ? "bulletList" : "orderedList")
+                                    .add("content", listContent));
                         }
-                        mainContent.add(Json.createObjectBuilder()
-                                .add("type", tagName.equals("ul") ? "bulletList" : "orderedList")
-                                .add("content", listContent));
                     }
                     case "p" -> {
                         final var pInlines = Json.createArrayBuilder();
@@ -473,7 +488,16 @@ class JiraFromPullRequest implements Callable<Integer> {
                             .add("type", "paragraph")
                             .add("content", Json.createArrayBuilder()
                                     .add(createTextContent(el.text(), "strong", null))));
-                    case "hr" -> mainContent.add(Json.createObjectBuilder().add("type", "rule"));
+                    case "hr" -> {
+                        if (isInBlockquote) {
+                            // ADF Rule: blockquote cannot contain rules. Convert to a text paragraph.
+                            mainContent.add(Json.createObjectBuilder()
+                                    .add("type", "paragraph")
+                                    .add("content", Json.createArrayBuilder().add(createTextContent("---"))));
+                        } else {
+                            mainContent.add(Json.createObjectBuilder().add("type", "rule"));
+                        }
+                    }
                     default -> appendHtmlAsAdf(el, mainContent, isInBlockquote);
                 }
             } else if (child instanceof TextNode tn) {
